@@ -161,20 +161,31 @@ pipeline {
         stage('Sync') {
             steps {
                 sh """
-                    rsync -a --delete \
-                        --exclude='target/' --exclude='.idea/' --exclude='*.iml' --exclude='.git/' \
-                        esquire.services/ ${PROJECT_DIR}/esquire.services/
+                    # esquire.services (exclude .git, target, .idea, *.iml)
+                    rm -rf ${PROJECT_DIR}/esquire.services
+                    mkdir -p ${PROJECT_DIR}/esquire.services
+                    tar cf - --exclude='.git' --exclude='target' --exclude='.idea' --exclude='*.iml' \
+                        -C esquire.services . | tar xf - -C ${PROJECT_DIR}/esquire.services/
 
-                    rsync -a --delete \
-                        --exclude='node_modules/' --exclude='.angular/' --exclude='.git/' \
-                        esquire.explorer/ ${PROJECT_DIR}/esquire.explorer/
+                    # esquire.explorer (exclude .git, node_modules, .angular)
+                    rm -rf ${PROJECT_DIR}/esquire.explorer
+                    mkdir -p ${PROJECT_DIR}/esquire.explorer
+                    tar cf - --exclude='.git' --exclude='node_modules' --exclude='.angular' \
+                        -C esquire.explorer . | tar xf - -C ${PROJECT_DIR}/esquire.explorer/
 
-                    rsync -a --delete --exclude='.git/' \
-                        esquire.db.seed/ ${PROJECT_DIR}/esquire.db.seed/
+                    # esquire.db.seed (exclude .git)
+                    rm -rf ${PROJECT_DIR}/esquire.db.seed
+                    mkdir -p ${PROJECT_DIR}/esquire.db.seed
+                    tar cf - --exclude='.git' \
+                        -C esquire.db.seed . | tar xf - -C ${PROJECT_DIR}/esquire.db.seed/
 
-                    rsync -a --delete --exclude='.git/' --exclude='Jenkinsfile' \
-                        deploy/ ${PROJECT_DIR}/deploy/
+                    # deploy infra (exclude .git, Jenkinsfile)
+                    rm -rf ${PROJECT_DIR}/deploy
+                    mkdir -p ${PROJECT_DIR}/deploy
+                    tar cf - --exclude='.git' --exclude='Jenkinsfile' \
+                        -C deploy . | tar xf - -C ${PROJECT_DIR}/deploy/
 
+                    # Fix Windows line endings in shell scripts
                     find ${PROJECT_DIR} -name '*.sh' -exec sed -i 's/\\r\$//' {} +
                 """
             }
@@ -557,18 +568,18 @@ pipeline {
             echo "Deploy failed! Collecting diagnostics..."
             sh """
                 echo "=== Pod status ==="
-                kubectl get pods -n ${NAMESPACE} -o wide 2>/dev/null || true
+                timeout 15 kubectl get pods -n ${NAMESPACE} -o wide 2>/dev/null || true
 
                 echo ""
                 echo "=== Events (last 20) ==="
-                kubectl get events -n ${NAMESPACE} --sort-by='.lastTimestamp' 2>/dev/null | tail -20 || true
+                timeout 15 kubectl get events -n ${NAMESPACE} --sort-by='.lastTimestamp' 2>/dev/null | tail -20 || true
 
                 echo ""
                 echo "=== Logs from non-Running pods ==="
-                for pod in \$(kubectl get pods -n ${NAMESPACE} --no-headers 2>/dev/null | grep -v Running | awk '{print \$1}'); do
+                for pod in \$(timeout 10 kubectl get pods -n ${NAMESPACE} --no-headers 2>/dev/null | grep -v Running | awk '{print \$1}'); do
                     echo "--- \$pod ---"
-                    kubectl logs \$pod -n ${NAMESPACE} --tail=30 2>&1 || true
-                    kubectl describe pod \$pod -n ${NAMESPACE} 2>&1 | tail -15 || true
+                    timeout 10 kubectl logs \$pod -n ${NAMESPACE} --tail=30 2>&1 || true
+                    timeout 10 kubectl describe pod \$pod -n ${NAMESPACE} 2>&1 | tail -15 || true
                     echo ""
                 done
             """
