@@ -42,9 +42,9 @@ pipeline {
             description: 'Delete K8s namespace and redeploy from scratch (WARNING: destroys Keycloak data)')
 
         // ── Branch overrides ──────────────────────────────────────────────────
-        string(name: 'BRANCH_SERVICES', defaultValue: 'main', description: 'Branch for esquire.services')
-        string(name: 'BRANCH_EXPLORER', defaultValue: 'main', description: 'Branch for esquire.explorer')
-        string(name: 'BRANCH_DB_SEED',  defaultValue: 'main', description: 'Branch for esquire.db.seed')
+        string(name: 'BRANCH_SERVICES', defaultValue: 'develop', description: 'Branch for esquire.services')
+        string(name: 'BRANCH_EXPLORER', defaultValue: 'develop', description: 'Branch for esquire.explorer')
+        string(name: 'BRANCH_DB_SEED',  defaultValue: 'develop', description: 'Branch for esquire.db.seed')
     }
 
     environment {
@@ -111,8 +111,15 @@ pipeline {
                     if (params.DEPLOY_HOST?.trim()) {
                         env.RESOLVED_HOST = params.DEPLOY_HOST.trim()
                     } else {
+                        // Detect real host IP (works inside Docker container too)
                         env.RESOLVED_HOST = sh(
-                            script: "hostname -I | awk '{print \$1}'",
+                            script: """
+                                if [ -f /.dockerenv ]; then
+                                    docker run --rm --net=host busybox sh -c "ip route get 1 2>/dev/null | sed 's/.*src \\([^ ]*\\).*/\\1/'"
+                                else
+                                    hostname -I | awk '{print \$1}'
+                                fi
+                            """,
                             returnStdout: true
                         ).trim()
                     }
@@ -474,8 +481,12 @@ pipeline {
         stage('Smoke Test') {
             steps {
                 sh '''
+                    # Get K8s node IP (works with minikube, microk8s, etc.)
+                    NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "localhost")
+                    echo "K8s node IP: $NODE_IP"
+
                     echo "Testing Gateway via NodePort :30000..."
-                    STATUS=$(curl -so /dev/null -w "%{http_code}" http://localhost:30000/actuator/health 2>/dev/null || echo "000")
+                    STATUS=$(curl -so /dev/null -w "%{http_code}" --connect-timeout 5 http://$NODE_IP:30000/actuator/health 2>/dev/null || echo "000")
                     if [ "$STATUS" = "200" ]; then
                         echo "Gateway -> 200 OK"
                     else
@@ -484,7 +495,7 @@ pipeline {
                     fi
 
                     echo "Testing Frontend via NodePort :30200..."
-                    STATUS=$(curl -so /dev/null -w "%{http_code}" http://localhost:30200 2>/dev/null || echo "000")
+                    STATUS=$(curl -so /dev/null -w "%{http_code}" --connect-timeout 5 http://$NODE_IP:30200 2>/dev/null || echo "000")
                     if [ "$STATUS" = "200" ]; then
                         echo "Frontend -> 200 OK"
                     else
@@ -492,7 +503,7 @@ pipeline {
                     fi
 
                     echo "Testing Keycloak via NodePort :30080..."
-                    STATUS=$(curl -so /dev/null -w "%{http_code}" http://localhost:30080/health/ready 2>/dev/null || echo "000")
+                    STATUS=$(curl -so /dev/null -w "%{http_code}" --connect-timeout 5 http://$NODE_IP:30080/health/ready 2>/dev/null || echo "000")
                     if [ "$STATUS" = "200" ]; then
                         echo "Keycloak -> 200 OK"
                     else
