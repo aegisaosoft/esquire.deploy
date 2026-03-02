@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: esquire
+  labels:
+    app: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: esquire/frontend:latest
+          imagePullPolicy: Never
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              envsubst < ./public/assets/config.json.template > ./public/assets/config.json &&
+              npx ng serve --host 0.0.0.0 --port 4200 --poll 2000
+          ports:
+            - containerPort: 4200
+          env:
+            - name: BACKEND_HOST
+              value: "192.168.1.104"
+            - name: BACKEND_PORT
+              value: "30000"
+            - name: KEYCLOAK_FACADE_HOST
+              value: "192.168.1.104"
+            - name: KEYCLOAK_FACADE_PORT
+              value: "30080"
+            - name: KEYCLOAK_REALM
+              valueFrom:
+                configMapKeyRef:
+                  name: esq-config
+                  key: KEYCLOAK_REALM
+            - name: KEYCLOAK_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: esq-config
+                  key: KEYCLOAK_CLIENT_ID
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: esquire
+spec:
+  type: NodePort
+  selector:
+    app: frontend
+  ports:
+    - port: 4200
+      targetPort: 4200
+      nodePort: 30200

@@ -1,0 +1,22 @@
+# External PostgreSQL — running on host, not in K8s
+# This creates a Service + Endpoints pointing to the host DB
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-external
+  namespace: esquire
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: postgres-external
+  namespace: esquire
+subsets:
+  - addresses:
+      - ip: 192.168.1.104
+    ports:
+      - port: 5432

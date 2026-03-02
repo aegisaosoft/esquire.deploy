@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enyman
+  namespace: esquire
+  labels:
+    app: enyman
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: enyman
+  template:
+    metadata:
+      labels:
+        app: enyman
+    spec:
+      containers:
+        - name: enyman
+          image: esquire/enyman:latest
+          imagePullPolicy: Never
+          command: ["java", "-jar", "app.jar"]
+          ports:
+            - containerPort: 3003
+          env:
+            - name: ENYMAN_PORT
+              value: "3003"
+            - name: LOG_LEVEL_ROOT
+              valueFrom:
+                configMapKeyRef:
+                  name: esq-config
+                  key: LOG_LEVEL_ROOT
+            - name: LOG_LEVEL_SF
+              valueFrom:
+                configMapKeyRef:
+                  name: esq-config
+                  key: LOG_LEVEL_SF
+            - name: LOG_LEVEL_MIR0N
+              valueFrom:
+                configMapKeyRef:
+                  name: esq-config
+                  key: LOG_LEVEL_MIR0N
+            - name: DB_ENYMAN_VENDOR
+              value: "dev-postgres"
+            - name: DB_ENYMAN_HOST
+              value: "postgres-external"
+            - name: DB_ENYMAN_PORT
+              value: "5432"
+            - name: DB_ENYMAN_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: esq-config
+                  key: POSTGRES_DB
+            - name: DB_ENYMAN_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: esq-config
+                  key: POSTGRES_USER
+            - name: DB_ENYMAN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: esq-secrets
+                  key: POSTGRES_PASSWORD
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: enyman
+  namespace: esquire
+spec:
+  selector:
+    app: enyman
+  ports:
+    - port: 3003
+      targetPort: 3003

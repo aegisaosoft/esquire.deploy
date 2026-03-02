@@ -1,0 +1,240 @@
+# =============================================================================
+# Esquire Compose — Multi-stage build (Maven builds inside Docker)
+# PostgreSQL is external (already running on 192.168.1.104)
+# HTTPS via Nginx reverse-proxy with self-signed certificate
+#
+# Usage:  docker compose build && docker compose up -d
+# Access: https://<DEPLOY_HOST>   (accept self-signed cert in browser)
+# =============================================================================
+name: esq-prod
+
+services:
+
+  # ── HTTPS Reverse Proxy (Nginx) ──────────────────────────────────────────
+  proxy:
+    container_name: esq-proxy
+    build:
+      context: ./proxy
+    image: esquire/proxy:latest
+    restart: unless-stopped
+    ports:
+      - "443:443"        # Frontend  (HTTPS)
+      - "3443:3443"      # Gateway   (HTTPS)
+      - "8443:8443"      # Keycloak  (HTTPS)
+    environment:
+      - DEPLOY_HOST=${DEPLOY_HOST}
+    volumes:
+      - proxy-certs:/etc/nginx/certs
+    depends_on:
+      - frontend
+      - gateway
+      - keycloak
+    networks:
+      - esquirenet
+
+  # ── Keycloak ─────────────────────────────────────────────────────────────
+  keycloak:
+    container_name: esq-keycloak
+    image: quay.io/keycloak/keycloak:26.4.7
+    restart: unless-stopped
+    command: start-dev --import-realm
+    # порт 8080 доступен только внутри Docker-сети, снаружи — через proxy :8443
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HEALTH_ENABLED: "true"
+      KC_PROXY_HEADERS: "xforwarded"
+    volumes:
+      - ./import/esquire.json:/opt/keycloak/data/import/realm.json
+      - kcdata:/opt/keycloak/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /health/ready HTTP/1.1\\r\\nhost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep 'HTTP/1.1 200 OK' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - esquirenet
+
+  # ── Backend micro-services ───────────────────────────────────────────────
+  biztree:
+    container_name: esq-biztree
+    build:
+      context: ../esquire.services
+      dockerfile: bizTree/Dockerfile
+    image: esquire/biztree:latest
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - BIZTREE_PORT=3002
+      - LOG_LEVEL_ROOT=${LOG_LEVEL_ROOT}
+      - LOG_LEVEL_SF=${LOG_LEVEL_SF}
+      - LOG_LEVEL_MIR0N=${LOG_LEVEL_MIR0N}
+      - DB_BIZTREE_VENDOR=dev-postgres
+      - DB_BIZTREE_HOST=host.docker.internal
+      - DB_BIZTREE_PORT=5432
+      - DB_BIZTREE_NAME=${POSTGRES_DB}
+      - DB_BIZTREE_USERNAME=${POSTGRES_USER}
+      - DB_BIZTREE_PASSWORD=${POSTGRES_PASSWORD}
+    command: ["java", "-jar", "app.jar"]
+    networks:
+      - esquirenet
+
+  enyman:
+    container_name: esq-enyman
+    build:
+      context: ../esquire.services
+      dockerfile: enyMan/Dockerfile
+    image: esquire/enyman:latest
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - ENYMAN_PORT=3003
+      - LOG_LEVEL_ROOT=${LOG_LEVEL_ROOT}
+      - LOG_LEVEL_SF=${LOG_LEVEL_SF}
+      - LOG_LEVEL_MIR0N=${LOG_LEVEL_MIR0N}
+      - DB_ENYMAN_VENDOR=dev-postgres
+      - DB_ENYMAN_HOST=host.docker.internal
+      - DB_ENYMAN_PORT=5432
+      - DB_ENYMAN_NAME=${POSTGRES_DB}
+      - DB_ENYMAN_USERNAME=${POSTGRES_USER}
+      - DB_ENYMAN_PASSWORD=${POSTGRES_PASSWORD}
+    command: ["java", "-jar", "app.jar"]
+    networks:
+      - esquirenet
+
+  pacman:
+    container_name: esq-pacman
+    build:
+      context: ../esquire.services
+      dockerfile: pacMan/Dockerfile
+    image: esquire/pacman:latest
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - PACMAN_PORT=3004
+      - LOG_LEVEL_ROOT=${LOG_LEVEL_ROOT}
+      - LOG_LEVEL_SF=${LOG_LEVEL_SF}
+      - LOG_LEVEL_MIR0N=${LOG_LEVEL_MIR0N}
+      - DB_PACMAN_VENDOR=dev-postgres
+      - DB_PACMAN_HOST=host.docker.internal
+      - DB_PACMAN_PORT=5432
+      - DB_PACMAN_NAME=${POSTGRES_DB}
+      - DB_PACMAN_USERNAME=${POSTGRES_USER}
+      - DB_PACMAN_PASSWORD=${POSTGRES_PASSWORD}
+    command: ["java", "-jar", "app.jar"]
+    networks:
+      - esquirenet
+
+  keysmith:
+    container_name: esq-keysmith
+    build:
+      context: ../esquire.services
+      dockerfile: keySmith/Dockerfile
+    image: esquire/keysmith:latest
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - KEYSMITH_PORT=3005
+      - LOG_LEVEL_ROOT=${LOG_LEVEL_ROOT}
+      - LOG_LEVEL_SF=${LOG_LEVEL_SF}
+      - LOG_LEVEL_MIR0N=${LOG_LEVEL_MIR0N}
+      - DB_KEYSMITH_VENDOR=dev-postgres
+      - DB_KEYSMITH_HOST=host.docker.internal
+      - DB_KEYSMITH_PORT=5432
+      - DB_KEYSMITH_NAME=${POSTGRES_DB}
+      - DB_KEYSMITH_USERNAME=${POSTGRES_USER}
+      - DB_KEYSMITH_PASSWORD=${POSTGRES_PASSWORD}
+    command: ["java", "-jar", "app.jar"]
+    networks:
+      - esquirenet
+
+  # ── API Gateway ──────────────────────────────────────────────────────────
+  gateway:
+    container_name: esq-gateway
+    build:
+      context: ../esquire.services
+      dockerfile: gateway/Dockerfile
+    image: esquire/gateway:latest
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7070/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    environment:
+      - GATEWAY_PORT=7070
+      - BIZTREE_PORT=3002
+      - BIZTREE_HOST=esq-biztree
+      - ENYMAN_PORT=3003
+      - ENYMAN_HOST=esq-enyman
+      - PACMAN_PORT=3004
+      - PACMAN_HOST=esq-pacman
+      - KEYSMITH_PORT=3005
+      - KEYSMITH_HOST=esq-keysmith
+      - KEYCLOAK_HOST=esq-keycloak
+      - KEYCLOAK_PORT=8080
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID}
+      - CORS_ALLOWED_ORIGINS=https://${DEPLOY_HOST}
+      - LOG_LEVEL_ROOT=${LOG_LEVEL_ROOT}
+      - LOG_LEVEL_SF=${LOG_LEVEL_SF}
+      - LOG_LEVEL_MIR0N=${LOG_LEVEL_MIR0N}
+      - GW_SERVICE_METRICS_ENABLED=true
+    command: ["java", "-jar", "app.jar"]
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      biztree:
+        condition: service_started
+      enyman:
+        condition: service_started
+      pacman:
+        condition: service_started
+      keysmith:
+        condition: service_started
+    networks:
+      - esquirenet
+
+  # ── Angular Frontend ─────────────────────────────────────────────────────
+  frontend:
+    container_name: esq-frontend
+    build:
+      context: ../esquire.explorer/frontend
+    image: esquire/frontend:latest
+    restart: unless-stopped
+    # порт 4200 доступен только внутри Docker-сети, снаружи — через proxy :443
+    environment:
+      - BACKEND_HOST=${DEPLOY_HOST}
+      - BACKEND_PORT=3443
+      - KEYCLOAK_FACADE_HOST=${DEPLOY_HOST}
+      - KEYCLOAK_FACADE_PORT=8443
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID}
+    command: >
+      /bin/sh -c "
+      envsubst < ./public/assets/config.json.template > ./public/assets/config.json &&
+      npx ng serve --host 0.0.0.0 --port 4200 --poll 2000
+      "
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - esquirenet
+
+volumes:
+  kcdata:
+  proxy-certs:
+
+networks:
+  esquirenet:
+    driver: bridge

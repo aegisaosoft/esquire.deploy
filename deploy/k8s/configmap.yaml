@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: esq-config
+  namespace: esquire
+data:
+  DEPLOY_HOST: "192.168.1.104"
+  POSTGRES_DB: "esq2025"
+  POSTGRES_USER: "esq2025"
+  KEYCLOAK_REALM: "esquire"
+  KEYCLOAK_CLIENT_ID: "esq-angular"
+  LOG_LEVEL_ROOT: "ERROR"
+  LOG_LEVEL_SF: "ERROR"
+  LOG_LEVEL_MIR0N: "DEBUG"
