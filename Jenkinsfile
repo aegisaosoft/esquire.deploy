@@ -30,6 +30,8 @@ pipeline {
             description: 'Target host IP or hostname (auto-detected if empty)')
         string(name: 'DB_HOST', defaultValue: '',
             description: 'PostgreSQL host (defaults to DEPLOY_HOST if empty)')
+        string(name: 'REGISTRY', defaultValue: '',
+            description: 'Container registry (e.g. myregistry:5000). Empty = local images for minikube/microk8s/k3s')
 
         // ── Which repos to rebuild ────────────────────────────────────────────
         booleanParam(name: 'BUILD_SERVICES', defaultValue: true,
@@ -138,7 +140,10 @@ pipeline {
                 sh """
                     mkdir -p ${PROJECT_DIR}
 
-                    docker info > /dev/null 2>&1 || { echo "Docker is not running!"; exit 1; }
+                    # docker info may return non-zero due to warnings even when working
+                    docker version --format '{{.Server.Version}}' > /dev/null 2>&1 || \
+                        docker info > /dev/null 2>&1 || \
+                        { echo "Docker is not running!"; exit 1; }
                     kubectl version --client > /dev/null 2>&1 || { echo "kubectl not found!"; exit 1; }
 
                     if command -v microk8s > /dev/null 2>&1; then
@@ -348,7 +353,15 @@ pipeline {
                             fi
                             ;;
                         *)
-                            echo "Generic K8s — images accessible via Docker daemon."
+                            if [ -n "$REGISTRY" ]; then
+                                echo "Full K8s — pushing images to registry $REGISTRY..."
+                                for img in $IMAGES; do
+                                    docker tag $img:latest $REGISTRY/$img:latest
+                                    docker push $REGISTRY/$img:latest
+                                done
+                            else
+                                echo "Generic K8s — images accessible via Docker daemon."
+                            fi
                             ;;
                     esac
                 '''
