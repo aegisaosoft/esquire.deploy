@@ -161,25 +161,22 @@ pipeline {
         stage('Sync') {
             steps {
                 sh """
-                    # esquire.services (exclude .git, target, .idea, *.iml)
-                    rm -rf ${PROJECT_DIR}/esquire.services
+                    # esquire.services — overwrite only (target/ is root-owned from Maven, excluded anyway)
                     mkdir -p ${PROJECT_DIR}/esquire.services
                     tar cf - --exclude='.git' --exclude='target' --exclude='.idea' --exclude='*.iml' \
                         -C esquire.services . | tar xf - -C ${PROJECT_DIR}/esquire.services/
 
-                    # esquire.explorer (exclude .git, node_modules, .angular)
-                    rm -rf ${PROJECT_DIR}/esquire.explorer
+                    # esquire.explorer — overwrite only
                     mkdir -p ${PROJECT_DIR}/esquire.explorer
                     tar cf - --exclude='.git' --exclude='node_modules' --exclude='.angular' \
                         -C esquire.explorer . | tar xf - -C ${PROJECT_DIR}/esquire.explorer/
 
-                    # esquire.db.seed (exclude .git)
-                    rm -rf ${PROJECT_DIR}/esquire.db.seed
+                    # esquire.db.seed — overwrite only
                     mkdir -p ${PROJECT_DIR}/esquire.db.seed
                     tar cf - --exclude='.git' \
                         -C esquire.db.seed . | tar xf - -C ${PROJECT_DIR}/esquire.db.seed/
 
-                    # deploy infra (exclude .git, Jenkinsfile)
+                    # deploy — clean copy (needs fresh __DEPLOY_HOST__ placeholders)
                     rm -rf ${PROJECT_DIR}/deploy
                     mkdir -p ${PROJECT_DIR}/deploy
                     tar cf - --exclude='.git' --exclude='Jenkinsfile' \
@@ -236,6 +233,11 @@ pipeline {
                                 -w /build \
                                 maven:3-eclipse-temurin-21 \
                                 mvn clean package -DskipTests -q
+
+                            # Fix ownership: Maven runs as root, but Jenkins needs to manage these files
+                            docker run --rm \
+                                -v ${PROJECT_DIR}/esquire.services:/build \
+                                busybox chown -R \$(id -u):\$(id -g) /build
                         """
                         echo "Maven build complete. JARs ready in target/ directories."
                     }
