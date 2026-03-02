@@ -56,7 +56,7 @@ spec:
                   name: esq-config
                   key: KEYCLOAK_CLIENT_ID
             - name: CORS_ALLOWED_ORIGINS
-              value: "http://__DEPLOY_HOST__:30200"
+              value: "https://__DEPLOY_HOST__:30443,http://__DEPLOY_HOST__:30200"
             - name: LOG_LEVEL_ROOT
               valueFrom:
                 configMapKeyRef:

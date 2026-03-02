@@ -23,6 +23,8 @@ spec:
           args:
             - |
               envsubst < ./public/assets/config.json.template > ./public/assets/config.json &&
+              sed -i 's|"http://|"https://|g' ./public/assets/config.json &&
+              echo "==> config.json:" && cat ./public/assets/config.json &&
               npx ng serve --host 0.0.0.0 --port 4200 --poll 2000
           ports:
             - containerPort: 4200
@@ -30,11 +32,11 @@ spec:
             - name: BACKEND_HOST
               value: "__DEPLOY_HOST__"
             - name: BACKEND_PORT
-              value: "30000"
+              value: "30343"
             - name: KEYCLOAK_FACADE_HOST
               value: "__DEPLOY_HOST__"
             - name: KEYCLOAK_FACADE_PORT
-              value: "30080"
+              value: "30843"
             - name: KEYCLOAK_REALM
               valueFrom:
                 configMapKeyRef:

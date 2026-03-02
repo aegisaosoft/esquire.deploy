@@ -138,6 +138,8 @@ pipeline {
                         echo "microk8s" > ${PROJECT_DIR}/.k8s-runtime
                     elif command -v k3s > /dev/null 2>&1; then
                         echo "k3s" > ${PROJECT_DIR}/.k8s-runtime
+                    elif command -v minikube > /dev/null 2>&1 || docker ps --format '{{.Names}}' | grep -q '^minikube\$'; then
+                        echo "minikube" > ${PROJECT_DIR}/.k8s-runtime
                     else
                         echo "generic" > ${PROJECT_DIR}/.k8s-runtime
                     fi
@@ -186,43 +188,109 @@ pipeline {
             }
         }
 
-        // ── 6. Build Docker images ──────────────────────────────────────────
+        // ── 6. Maven pre-build (if Dockerfiles are NOT multi-stage) ────────
+        //    Auto-detects: if Dockerfile has "AS builder" → multi-stage, skip.
+        //    Otherwise → run Maven in Docker container to produce JARs first.
+        stage('Maven Build') {
+            when {
+                expression { return params.BUILD_SERVICES }
+            }
+            steps {
+                script {
+                    def isMultiStage = sh(
+                        script: "grep -qi 'AS builder' ${PROJECT_DIR}/esquire.services/bizTree/Dockerfile && echo true || echo false",
+                        returnStdout: true
+                    ).trim()
+
+                    if (isMultiStage == 'true') {
+                        echo "Multi-stage Dockerfiles detected — skipping Maven pre-build."
+                        env.DOCKERFILE_MODE = 'multistage'
+                    } else {
+                        echo "Simple Dockerfiles detected — running Maven build in Docker..."
+                        env.DOCKERFILE_MODE = 'simple'
+                        sh """
+                            docker run --rm \
+                                -v ${PROJECT_DIR}/esquire.services:/build \
+                                -v esquire-maven-cache:/root/.m2 \
+                                -w /build \
+                                maven:3-eclipse-temurin-21 \
+                                mvn clean package -DskipTests -q
+                        """
+                        echo "Maven build complete. JARs ready in target/ directories."
+                    }
+                }
+            }
+        }
+
+        // ── 7. Build Docker images ──────────────────────────────────────────
+        //    Simple Dockerfiles:    context = service subdir  (COPY target/*.jar)
+        //    Multi-stage Dockerfiles: context = repo root     (needs parent pom + common)
         stage('Build Images') {
             parallel {
                 stage('biztree') {
                     when { expression { return params.BUILD_SERVICES } }
                     steps {
-                        sh "docker build -t esquire/biztree:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.services/bizTree/Dockerfile ${PROJECT_DIR}/esquire.services"
+                        script {
+                            def ctx = (env.DOCKERFILE_MODE == 'multistage')
+                                ? "${PROJECT_DIR}/esquire.services"
+                                : "${PROJECT_DIR}/esquire.services/bizTree"
+                            sh "docker build -t esquire/biztree:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.services/bizTree/Dockerfile ${ctx}"
+                        }
                     }
                 }
                 stage('enyman') {
                     when { expression { return params.BUILD_SERVICES } }
                     steps {
-                        sh "docker build -t esquire/enyman:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.services/enyMan/Dockerfile ${PROJECT_DIR}/esquire.services"
+                        script {
+                            def ctx = (env.DOCKERFILE_MODE == 'multistage')
+                                ? "${PROJECT_DIR}/esquire.services"
+                                : "${PROJECT_DIR}/esquire.services/enyMan"
+                            sh "docker build -t esquire/enyman:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.services/enyMan/Dockerfile ${ctx}"
+                        }
                     }
                 }
                 stage('pacman') {
                     when { expression { return params.BUILD_SERVICES } }
                     steps {
-                        sh "docker build -t esquire/pacman:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.services/pacMan/Dockerfile ${PROJECT_DIR}/esquire.services"
+                        script {
+                            def ctx = (env.DOCKERFILE_MODE == 'multistage')
+                                ? "${PROJECT_DIR}/esquire.services"
+                                : "${PROJECT_DIR}/esquire.services/pacMan"
+                            sh "docker build -t esquire/pacman:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.services/pacMan/Dockerfile ${ctx}"
+                        }
                     }
                 }
                 stage('keysmith') {
                     when { expression { return params.BUILD_SERVICES } }
                     steps {
-                        sh "docker build -t esquire/keysmith:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.services/keySmith/Dockerfile ${PROJECT_DIR}/esquire.services"
+                        script {
+                            def ctx = (env.DOCKERFILE_MODE == 'multistage')
+                                ? "${PROJECT_DIR}/esquire.services"
+                                : "${PROJECT_DIR}/esquire.services/keySmith"
+                            sh "docker build -t esquire/keysmith:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.services/keySmith/Dockerfile ${ctx}"
+                        }
                     }
                 }
                 stage('gateway') {
                     when { expression { return params.BUILD_SERVICES } }
                     steps {
-                        sh "docker build -t esquire/gateway:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.services/gateway/Dockerfile ${PROJECT_DIR}/esquire.services"
+                        script {
+                            def ctx = (env.DOCKERFILE_MODE == 'multistage')
+                                ? "${PROJECT_DIR}/esquire.services"
+                                : "${PROJECT_DIR}/esquire.services/gateway"
+                            sh "docker build -t esquire/gateway:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.services/gateway/Dockerfile ${ctx}"
+                        }
                     }
                 }
                 stage('frontend') {
                     when { expression { return params.BUILD_FRONTEND } }
                     steps {
                         sh "docker build -t esquire/frontend:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.explorer/frontend/Dockerfile ${PROJECT_DIR}/esquire.explorer/frontend"
+                    }
+                }
+                stage('proxy') {
+                    steps {
+                        sh "docker build -t esquire/proxy:${IMAGE_TAG} ${PROJECT_DIR}/deploy/proxy"
                     }
                 }
             }
@@ -237,9 +305,9 @@ pipeline {
                 sh '''
                     RUNTIME=$(cat /opt/esquire/.k8s-runtime)
 
-                    IMAGES=""
+                    IMAGES="esquire/proxy"
                     if [ "$BUILD_SERVICES" = "true" ]; then
-                        IMAGES="esquire/biztree esquire/enyman esquire/pacman esquire/keysmith esquire/gateway"
+                        IMAGES="$IMAGES esquire/biztree esquire/enyman esquire/pacman esquire/keysmith esquire/gateway"
                     fi
                     if [ "$BUILD_FRONTEND" = "true" ]; then
                         IMAGES="$IMAGES esquire/frontend"
@@ -257,6 +325,19 @@ pipeline {
                                 echo "Importing $img into k3s..."
                                 docker save $img:latest | sudo k3s ctr images import -
                             done
+                            ;;
+                        minikube)
+                            if command -v minikube > /dev/null 2>&1; then
+                                for img in $IMAGES; do
+                                    echo "Loading $img into minikube..."
+                                    minikube image load $img:latest
+                                done
+                            else
+                                for img in $IMAGES; do
+                                    echo "Loading $img into minikube (via docker)..."
+                                    docker save $img:latest | docker exec -i minikube ctr -n k8s.io image import -
+                                done
+                            fi
                             ;;
                         *)
                             echo "Generic K8s — images accessible via Docker daemon."
@@ -331,6 +412,7 @@ pipeline {
                     kubectl apply -f ${K8S_DIR}/keysmith.yaml
                     kubectl apply -f ${K8S_DIR}/gateway.yaml
                     kubectl apply -f ${K8S_DIR}/frontend.yaml
+                    kubectl apply -f ${K8S_DIR}/proxy.yaml
                 """
             }
         }
@@ -346,6 +428,7 @@ pipeline {
                     if (params.BUILD_FRONTEND) {
                         restarts += ['frontend']
                     }
+                    restarts += ['proxy']
                     if (restarts) {
                         def names = restarts.join(' ')
                         sh """
@@ -380,6 +463,9 @@ pipeline {
 
                 echo "Waiting for Frontend..."
                 sh "kubectl rollout status deployment/frontend -n ${NAMESPACE} --timeout=180s"
+
+                echo "Waiting for HTTPS Proxy..."
+                sh "kubectl rollout status deployment/proxy -n ${NAMESPACE} --timeout=60s"
             }
         }
 
@@ -428,9 +514,13 @@ pipeline {
                     echo "========================================"
                     echo "  Deployment Complete!"
                     echo "========================================"
-                    echo "  Frontend:  http://${env.RESOLVED_HOST}:30200"
-                    echo "  Gateway:   http://${env.RESOLVED_HOST}:30000"
-                    echo "  Keycloak:  http://${env.RESOLVED_HOST}:30080"
+                    echo "  Frontend (HTTPS):  https://${env.RESOLVED_HOST}:30443"
+                    echo "  Gateway  (HTTPS):  https://${env.RESOLVED_HOST}:30343"
+                    echo "  Keycloak (HTTPS):  https://${env.RESOLVED_HOST}:30843"
+                    echo ""
+                    echo "  Frontend (HTTP):   http://${env.RESOLVED_HOST}:30200"
+                    echo "  Gateway  (HTTP):   http://${env.RESOLVED_HOST}:30000"
+                    echo "  Keycloak (HTTP):   http://${env.RESOLVED_HOST}:30080"
                     echo "========================================"
                 """
             }

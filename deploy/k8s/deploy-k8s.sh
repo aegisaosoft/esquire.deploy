@@ -69,12 +69,16 @@ kubectl rollout status deployment/gateway -n esquire --timeout=120s
 log "Deploying Frontend..."
 kubectl apply -f "$SCRIPT_DIR/frontend.yaml"
 
+log "Deploying HTTPS Proxy..."
+kubectl apply -f "$SCRIPT_DIR/proxy.yaml"
+
 log "Waiting for all pods..."
 kubectl rollout status deployment/biztree -n esquire --timeout=90s
 kubectl rollout status deployment/enyman -n esquire --timeout=90s
 kubectl rollout status deployment/pacman -n esquire --timeout=90s
 kubectl rollout status deployment/keysmith -n esquire --timeout=90s
 kubectl rollout status deployment/frontend -n esquire --timeout=120s
+kubectl rollout status deployment/proxy -n esquire --timeout=60s
 
 echo ""
 log "All deployments ready!"
@@ -83,6 +87,10 @@ kubectl get pods -n esquire
 kubectl get svc -n esquire
 echo ""
 log "Services available at:"
-log "  Frontend:  http://${DEPLOY_HOST}:30200"
-log "  Gateway:   http://${DEPLOY_HOST}:30000"
-log "  Keycloak:  http://${DEPLOY_HOST}:30080"
+log "  Frontend (HTTPS):  https://${DEPLOY_HOST}:30443"
+log "  Gateway  (HTTPS):  https://${DEPLOY_HOST}:30343"
+log "  Keycloak (HTTPS):  https://${DEPLOY_HOST}:30843"
+log ""
+log "  Frontend (HTTP):   http://${DEPLOY_HOST}:30200"
+log "  Gateway  (HTTP):   http://${DEPLOY_HOST}:30000"
+log "  Keycloak (HTTP):   http://${DEPLOY_HOST}:30080"
