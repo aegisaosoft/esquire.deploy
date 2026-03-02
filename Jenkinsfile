@@ -140,10 +140,7 @@ pipeline {
                 sh """
                     mkdir -p ${PROJECT_DIR}
 
-                    # docker info may return non-zero due to warnings even when working
-                    docker version --format '{{.Server.Version}}' > /dev/null 2>&1 || \
-                        docker info > /dev/null 2>&1 || \
-                        { echo "Docker is not running!"; exit 1; }
+                    docker ps > /dev/null 2>&1 || { echo "Docker is not running!"; exit 1; }
                     kubectl version --client > /dev/null 2>&1 || { echo "kubectl not found!"; exit 1; }
 
                     if command -v microk8s > /dev/null 2>&1; then
