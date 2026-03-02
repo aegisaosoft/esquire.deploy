@@ -3,6 +3,8 @@
 Infrastructure repository for the **Esquire Frameworks** platform.
 Contains Jenkins CI/CD pipeline, Kubernetes manifests, Docker Compose configs and Nginx reverse-proxy.
 
+**Fully parameterized** — deploys to any Linux host. No hardcoded IPs.
+
 ## Architecture
 
 ```
@@ -24,7 +26,7 @@ Contains Jenkins CI/CD pipeline, Kubernetes manifests, Docker Compose configs an
               └─────────┬───────────┘
                         v
                Kubernetes (namespace: esquire)
-               192.168.1.104
+               <any Linux host>
 ```
 
 ## Repository structure
@@ -34,7 +36,7 @@ esquire.deploy/
 ├── Jenkinsfile                     # Jenkins CI/CD pipeline
 ├── README.md
 ├── deploy/
-│   ├── .env                        # Environment variables
+│   ├── .env                        # Environment variables (DEPLOY_HOST auto-set)
 │   ├── compose.yaml                # Docker Compose — HTTPS (Nginx proxy)
 │   ├── compose.remote.yaml         # Docker Compose — direct ports
 │   ├── deploy.sh                   # Manual deploy script (bash)
@@ -46,16 +48,16 @@ esquire.deploy/
 │   │   └── entrypoint.sh           # Self-signed cert generation
 │   └── k8s/
 │       ├── namespace.yaml          # K8s namespace "esquire"
-│       ├── configmap.yaml          # App configuration
+│       ├── configmap.yaml          # App configuration (uses __DEPLOY_HOST__ placeholder)
 │       ├── secret.yaml             # DB & Keycloak credentials
-│       ├── postgres-endpoint.yaml  # External PostgreSQL service
+│       ├── postgres-endpoint.yaml  # External PostgreSQL service (uses __DB_HOST__ placeholder)
 │       ├── keycloak.yaml           # Keycloak deployment + service
 │       ├── biztree.yaml            # bizTree deployment + service
 │       ├── enyman.yaml             # enyMan deployment + service
 │       ├── pacman.yaml             # pacMan deployment + service
 │       ├── keysmith.yaml           # keySmith deployment + service
-│       ├── gateway.yaml            # API Gateway deployment + service
-│       ├── frontend.yaml           # Angular frontend deployment + service
+│       ├── gateway.yaml            # API Gateway (uses __DEPLOY_HOST__ placeholder)
+│       ├── frontend.yaml           # Angular frontend (uses __DEPLOY_HOST__ placeholder)
 │       └── deploy-k8s.sh           # Manual K8s deploy script
 └── scripts/
     └── *.bat                       # Legacy Windows startup scripts
@@ -75,13 +77,13 @@ esquire.deploy/
 
 ## Prerequisites
 
-Ubuntu server (192.168.1.104) with:
+Any Linux host with:
 
 - **Docker** + **Docker Compose**
 - **Kubernetes** (microk8s, k3s or kubeadm)
 - **kubectl**
 - **Jenkins** (with Pipeline plugin)
-- **PostgreSQL** running on the host (database `esq2025`)
+- **PostgreSQL** running on the host or reachable by network (database `esq2025`)
 
 ### Server setup
 
@@ -112,37 +114,54 @@ sudo systemctl restart jenkins
 
 ## Pipeline parameters
 
-| Parameter         | Default | Description                                                  |
-|-------------------|---------|--------------------------------------------------------------|
-| `BUILD_SERVICES`  | true    | Build backend images (biztree, enyman, pacman, keysmith, gw) |
-| `BUILD_FRONTEND`  | true    | Build Angular frontend image                                 |
-| `RUN_DB_SEED`     | false   | Execute SQL seed scripts from esquire.db.seed                |
-| `FULL_RESET`      | false   | Delete K8s namespace and redeploy from scratch               |
-| `BRANCH_SERVICES` | main    | Git branch for esquire.services                              |
-| `BRANCH_EXPLORER` | main    | Git branch for esquire.explorer                              |
-| `BRANCH_DB_SEED`  | main    | Git branch for esquire.db.seed                               |
+| Parameter         | Default       | Description                                                  |
+|-------------------|---------------|--------------------------------------------------------------|
+| `DEPLOY_HOST`     | (auto-detect) | Target host IP or hostname. If empty, uses `hostname -I`     |
+| `DB_HOST`         | = DEPLOY_HOST | PostgreSQL host IP. If empty, defaults to DEPLOY_HOST        |
+| `BUILD_SERVICES`  | true          | Build backend images (biztree, enyman, pacman, keysmith, gw) |
+| `BUILD_FRONTEND`  | true          | Build Angular frontend image                                 |
+| `RUN_DB_SEED`     | false         | Execute SQL seed scripts from esquire.db.seed                |
+| `FULL_RESET`      | false         | Delete K8s namespace and redeploy from scratch               |
+| `BRANCH_SERVICES` | main          | Git branch for esquire.services                              |
+| `BRANCH_EXPLORER` | main          | Git branch for esquire.explorer                              |
+| `BRANCH_DB_SEED`  | main          | Git branch for esquire.db.seed                               |
 
 ## Pipeline stages
 
 ```
  1. Checkout          Clone all 4 repos in parallel
- 2. Prepare           Verify Docker + kubectl, detect K8s runtime
- 3. Sync              rsync sources to /opt/esquire
- 4. Build Images      docker build × 6 images (parallel)
- 5. Import Images     docker save | microk8s/k3s ctr import
- 6. DB Seed           (optional) psql seed scripts
- 7. Full Reset        (optional) kubectl delete namespace
- 8. Apply Manifests   kubectl apply (namespace → config → services)
- 9. Rolling Restart   kubectl rollout restart (rebuilt services only)
-10. Wait for Rollouts kubectl rollout status (all deployments)
-11. Smoke Test        curl health endpoints via NodePorts
+ 2. Resolve Hosts     Auto-detect or use provided DEPLOY_HOST / DB_HOST
+ 3. Prepare           Verify Docker + kubectl, detect K8s runtime
+ 4. Sync              rsync sources to /opt/esquire
+ 5. Configure         Inject host IPs into .env and K8s manifests
+ 6. Build Images      docker build × 6 images (parallel)
+ 7. Import Images     docker save | microk8s/k3s ctr import
+ 8. DB Seed           (optional) psql seed scripts
+ 9. Full Reset        (optional) kubectl delete namespace
+10. Apply Manifests   kubectl apply (namespace → config → services)
+11. Rolling Restart   kubectl rollout restart (rebuilt services only)
+12. Wait for Rollouts kubectl rollout status (all deployments)
+13. Smoke Test        curl health endpoints via NodePorts
 ```
 
 ## Usage examples
 
 ### Full deploy (all services)
 
-Run with default parameters — builds everything and deploys.
+Run with default parameters — auto-detects host IP, builds and deploys everything.
+
+### Deploy to a specific host
+
+```
+DEPLOY_HOST = 10.0.0.50
+```
+
+### DB on a separate server
+
+```
+DEPLOY_HOST = 10.0.0.50
+DB_HOST     = 10.0.0.100
+```
 
 ### Frontend only
 
@@ -183,13 +202,23 @@ Destroys the namespace, re-seeds the database, and deploys fresh.
 ```bash
 cd deploy/k8s
 chmod +x deploy-k8s.sh
+
+# Auto-detect host IP:
 ./deploy-k8s.sh
+
+# Or specify host IP:
+./deploy-k8s.sh 10.0.0.50
+
+# Or specify host IP + separate DB host:
+./deploy-k8s.sh 10.0.0.50 10.0.0.100
 ```
 
 ### Docker Compose (HTTPS)
 
 ```bash
 cd deploy
+# Set DEPLOY_HOST in .env first
+echo "DEPLOY_HOST=10.0.0.50" >> .env
 chmod +x deploy.sh
 ./deploy.sh deploy
 ```
@@ -198,18 +227,19 @@ chmod +x deploy.sh
 
 ```bash
 cd deploy
+echo "DEPLOY_HOST=10.0.0.50" >> .env
 docker compose -f compose.remote.yaml up -d
 ```
 
 ## Access
 
-After deployment:
+After deployment (replace `<HOST>` with your DEPLOY_HOST):
 
-| Endpoint   | Kubernetes              | Docker Compose (HTTPS)          | Docker Compose (remote)          |
-|------------|-------------------------|---------------------------------|----------------------------------|
-| Frontend   | http://192.168.1.104:30200 | https://192.168.1.104        | http://192.168.1.104:4200        |
-| Gateway    | http://192.168.1.104:30000 | https://192.168.1.104:3443   | http://192.168.1.104:3000        |
-| Keycloak   | http://192.168.1.104:30080 | https://192.168.1.104:8443   | http://192.168.1.104:8080        |
+| Endpoint   | Kubernetes               | Docker Compose (HTTPS)      | Docker Compose (remote)       |
+|------------|--------------------------|-----------------------------|-------------------------------|
+| Frontend   | http://\<HOST\>:30200    | https://\<HOST\>            | http://\<HOST\>:4200          |
+| Gateway    | http://\<HOST\>:30000    | https://\<HOST\>:3443       | http://\<HOST\>:3000          |
+| Keycloak   | http://\<HOST\>:30080    | https://\<HOST\>:8443       | http://\<HOST\>:8080          |
 
 ## Related repositories
 

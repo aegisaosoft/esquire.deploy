@@ -1,5 +1,5 @@
 # =============================================================================
-# Esquire Production Compose — Remote Server 192.168.1.104
+# Esquire Production Compose — Remote Server
 # PostgreSQL is external (already running on host), not containerized
 # =============================================================================
 name: esq-prod

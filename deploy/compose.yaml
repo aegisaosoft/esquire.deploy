@@ -1,6 +1,6 @@
 # =============================================================================
 # Esquire Compose — Multi-stage build (Maven builds inside Docker)
-# PostgreSQL is external (already running on 192.168.1.104)
+# PostgreSQL is external (already running on the host)
 # HTTPS via Nginx reverse-proxy with self-signed certificate
 #
 # Usage:  docker compose build && docker compose up -d

@@ -1,15 +1,37 @@
 #!/bin/bash
 # =============================================================================
 # Esquire Kubernetes Deployment Script
-# Run on the server (192.168.1.104) where K8s is installed
+# Run on the target server where K8s is installed
+#
+# Usage:
+#   ./deploy-k8s.sh                         # auto-detect host IP
+#   ./deploy-k8s.sh 10.0.0.50               # specify host IP
+#   ./deploy-k8s.sh 10.0.0.50 10.0.0.100    # host IP + separate DB IP
 # =============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEPLOY_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
-log() { echo -e "${GREEN}[K8S]${NC} $1"; }
+log()  { echo -e "${GREEN}[K8S]${NC} $1"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+
+# --- Resolve host IPs ---
+DEPLOY_HOST="${1:-$(hostname -I | awk '{print $1}')}"
+DB_HOST="${2:-$DEPLOY_HOST}"
+
+log "Deploy host: $DEPLOY_HOST"
+log "DB host:     $DB_HOST"
+
+# --- Inject IPs into manifest templates ---
+log "Injecting host IPs into manifests..."
+sed -i "s|__DEPLOY_HOST__|${DEPLOY_HOST}|g" "$SCRIPT_DIR/configmap.yaml"
+sed -i "s|__DEPLOY_HOST__|${DEPLOY_HOST}|g" "$SCRIPT_DIR/gateway.yaml"
+sed -i "s|__DEPLOY_HOST__|${DEPLOY_HOST}|g" "$SCRIPT_DIR/frontend.yaml"
+sed -i "s|__DB_HOST__|${DB_HOST}|g"         "$SCRIPT_DIR/postgres-endpoint.yaml"
 
 # --- Apply manifests in order ---
 log "Creating namespace..."
@@ -22,10 +44,9 @@ kubectl apply -f "$SCRIPT_DIR/secret.yaml"
 log "Creating external PostgreSQL endpoint..."
 kubectl apply -f "$SCRIPT_DIR/postgres-endpoint.yaml"
 
-# Create Keycloak realm ConfigMap from JSON file
 log "Creating Keycloak realm ConfigMap..."
 kubectl create configmap keycloak-realm \
-  --from-file=realm.json="$SCRIPT_DIR/../import/esquire.json" \
+  --from-file=realm.json="$DEPLOY_DIR/import/esquire.json" \
   --namespace=esquire \
   --dry-run=client -o yaml | kubectl apply -f -
 
@@ -62,6 +83,6 @@ kubectl get pods -n esquire
 kubectl get svc -n esquire
 echo ""
 log "Services available at:"
-log "  Frontend:  http://192.168.1.104:30200"
-log "  Gateway:   http://192.168.1.104:30000"
-log "  Keycloak:  http://192.168.1.104:30080"
+log "  Frontend:  http://${DEPLOY_HOST}:30200"
+log "  Gateway:   http://${DEPLOY_HOST}:30000"
+log "  Keycloak:  http://${DEPLOY_HOST}:30080"

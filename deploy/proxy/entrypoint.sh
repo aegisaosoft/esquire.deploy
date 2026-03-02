@@ -10,8 +10,8 @@ if [ ! -f "$CERT_DIR/self-signed.crt" ]; then
     -newkey rsa:2048 \
     -keyout "$CERT_DIR/self-signed.key" \
     -out    "$CERT_DIR/self-signed.crt" \
-    -subj   "/CN=${DEPLOY_HOST:-192.168.1.104}/O=Esquire/C=US" \
-    -addext "subjectAltName=IP:${DEPLOY_HOST:-192.168.1.104}"
+    -subj   "/CN=${DEPLOY_HOST:-localhost}/O=Esquire/C=US" \
+    -addext "subjectAltName=IP:${DEPLOY_HOST:-127.0.0.1}"
   echo "==> Certificate created."
 fi
 

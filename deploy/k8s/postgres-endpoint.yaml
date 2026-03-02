@@ -17,6 +17,6 @@ metadata:
   namespace: esquire
 subsets:
   - addresses:
-      - ip: 192.168.1.104
+      - ip: __DB_HOST__
     ports:
       - port: 5432

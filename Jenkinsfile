@@ -1,8 +1,8 @@
 // =============================================================================
 // Esquire Frameworks — Jenkins CI/CD Pipeline (Kubernetes, Multi-Repo)
 //
-// Jenkins on 192.168.1.104.  Repos on GitHub (aegisaosoft).
-// Clones 3 repos → builds Docker images → deploys to K8s.
+// Fully parameterized — deploys to ANY Linux host.
+// Clones 3 repos from mir0n-pro → builds Docker images → deploys to K8s.
 //
 // Repo layout in workspace:
 //   $WORKSPACE/
@@ -11,7 +11,7 @@
 //   ├── esquire.db.seed/     ← git repo 3 (DB seed scripts)
 //   └── deploy/              ← this repo (infra: k8s, compose, Jenkinsfile)
 //
-// Jenkins job: Pipeline → SCM → this repo (esquire.deploy or however you name it)
+// Jenkins job: Pipeline → SCM → aegisaosoft/esquire.deploy
 // =============================================================================
 
 pipeline {
@@ -25,7 +25,13 @@ pipeline {
     }
 
     parameters {
-        // ── Which repos to rebuild ──────────────────────────────────────────
+        // ── Target host ───────────────────────────────────────────────────────
+        string(name: 'DEPLOY_HOST', defaultValue: '',
+            description: 'Target host IP or hostname (auto-detected if empty)')
+        string(name: 'DB_HOST', defaultValue: '',
+            description: 'PostgreSQL host (defaults to DEPLOY_HOST if empty)')
+
+        // ── Which repos to rebuild ────────────────────────────────────────────
         booleanParam(name: 'BUILD_SERVICES', defaultValue: true,
             description: 'Build backend microservices (bizTree, enyMan, pacMan, keySmith, gateway)')
         booleanParam(name: 'BUILD_FRONTEND', defaultValue: true,
@@ -35,7 +41,7 @@ pipeline {
         booleanParam(name: 'FULL_RESET',     defaultValue: false,
             description: 'Delete K8s namespace and redeploy from scratch (WARNING: destroys Keycloak data)')
 
-        // ── Branch overrides ────────────────────────────────────────────────
+        // ── Branch overrides ──────────────────────────────────────────────────
         string(name: 'BRANCH_SERVICES', defaultValue: 'main', description: 'Branch for esquire.services')
         string(name: 'BRANCH_EXPLORER', defaultValue: 'main', description: 'Branch for esquire.explorer')
         string(name: 'BRANCH_DB_SEED',  defaultValue: 'main', description: 'Branch for esquire.db.seed')
@@ -49,6 +55,7 @@ pipeline {
         PROJECT_DIR = '/opt/esquire'
         K8S_DIR     = '/opt/esquire/deploy/k8s'
         IMPORT_DIR  = '/opt/esquire/deploy/import'
+        ENV_FILE    = '/opt/esquire/deploy/.env'
 
         // K8s
         NAMESPACE = 'esquire'
@@ -62,7 +69,6 @@ pipeline {
             parallel {
                 stage('deploy (this repo)') {
                     steps {
-                        // Primary SCM checkout — this repo with Jenkinsfile + deploy/ + k8s/
                         checkout scm
                         script {
                             env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
@@ -97,17 +103,37 @@ pipeline {
             }
         }
 
-        // ── 2. Prepare server ───────────────────────────────────────────────
+        // ── 2. Resolve host IPs ────────────────────────────────────────────
+        stage('Resolve Hosts') {
+            steps {
+                script {
+                    // Auto-detect host IP if not provided
+                    if (params.DEPLOY_HOST?.trim()) {
+                        env.RESOLVED_HOST = params.DEPLOY_HOST.trim()
+                    } else {
+                        env.RESOLVED_HOST = sh(
+                            script: "hostname -I | awk '{print \$1}'",
+                            returnStdout: true
+                        ).trim()
+                    }
+                    // DB host defaults to deploy host
+                    env.RESOLVED_DB_HOST = params.DB_HOST?.trim() ? params.DB_HOST.trim() : env.RESOLVED_HOST
+
+                    echo "Deploy host: ${env.RESOLVED_HOST}"
+                    echo "DB host:     ${env.RESOLVED_DB_HOST}"
+                }
+            }
+        }
+
+        // ── 3. Prepare server ───────────────────────────────────────────────
         stage('Prepare') {
             steps {
                 sh """
                     mkdir -p ${PROJECT_DIR}
 
-                    # Verify tools
                     docker info > /dev/null 2>&1 || { echo "Docker is not running!"; exit 1; }
                     kubectl version --client > /dev/null 2>&1 || { echo "kubectl not found!"; exit 1; }
 
-                    # Detect K8s runtime
                     if command -v microk8s > /dev/null 2>&1; then
                         echo "microk8s" > ${PROJECT_DIR}/.k8s-runtime
                     elif command -v k3s > /dev/null 2>&1; then
@@ -120,38 +146,49 @@ pipeline {
             }
         }
 
-        // ── 3. Sync to /opt/esquire ─────────────────────────────────────────
+        // ── 4. Sync to /opt/esquire ─────────────────────────────────────────
         stage('Sync') {
             steps {
                 sh """
-                    # Backend services
                     rsync -a --delete \
                         --exclude='target/' --exclude='.idea/' --exclude='*.iml' --exclude='.git/' \
                         esquire.services/ ${PROJECT_DIR}/esquire.services/
 
-                    # Frontend
                     rsync -a --delete \
                         --exclude='node_modules/' --exclude='.angular/' --exclude='.git/' \
                         esquire.explorer/ ${PROJECT_DIR}/esquire.explorer/
 
-                    # DB seed scripts
                     rsync -a --delete --exclude='.git/' \
                         esquire.db.seed/ ${PROJECT_DIR}/esquire.db.seed/
 
-                    # Deploy configs (k8s manifests, compose, proxy, keycloak import)
                     rsync -a --delete --exclude='.git/' --exclude='Jenkinsfile' \
                         deploy/ ${PROJECT_DIR}/deploy/
 
-                    # Fix CRLF
                     find ${PROJECT_DIR} -name '*.sh' -exec sed -i 's/\\r\$//' {} +
                 """
             }
         }
 
-        // ── 4. Build Docker images ──────────────────────────────────────────
+        // ── 5. Inject host IPs into configs ─────────────────────────────────
+        stage('Configure') {
+            steps {
+                echo "Injecting DEPLOY_HOST=${env.RESOLVED_HOST}, DB_HOST=${env.RESOLVED_DB_HOST}..."
+                sh """
+                    # .env — set DEPLOY_HOST
+                    sed -i 's|^DEPLOY_HOST=.*|DEPLOY_HOST=${env.RESOLVED_HOST}|' ${ENV_FILE}
+
+                    # K8s manifests — replace __DEPLOY_HOST__ and __DB_HOST__ placeholders
+                    sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/configmap.yaml
+                    sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/gateway.yaml
+                    sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/frontend.yaml
+                    sed -i 's|__DB_HOST__|${env.RESOLVED_DB_HOST}|g'  ${K8S_DIR}/postgres-endpoint.yaml
+                """
+            }
+        }
+
+        // ── 6. Build Docker images ──────────────────────────────────────────
         stage('Build Images') {
             parallel {
-                // ── Backend services (5 images) ─────────────────────────────
                 stage('biztree') {
                     when { expression { return params.BUILD_SERVICES } }
                     steps {
@@ -182,7 +219,6 @@ pipeline {
                         sh "docker build -t esquire/gateway:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.services/gateway/Dockerfile ${PROJECT_DIR}/esquire.services"
                     }
                 }
-                // ── Frontend ────────────────────────────────────────────────
                 stage('frontend') {
                     when { expression { return params.BUILD_FRONTEND } }
                     steps {
@@ -192,7 +228,7 @@ pipeline {
             }
         }
 
-        // ── 5. Import images into K8s runtime ───────────────────────────────
+        // ── 7. Import images into K8s runtime ───────────────────────────────
         stage('Import Images') {
             when {
                 expression { return params.BUILD_SERVICES || params.BUILD_FRONTEND }
@@ -201,7 +237,6 @@ pipeline {
                 sh '''
                     RUNTIME=$(cat /opt/esquire/.k8s-runtime)
 
-                    # Collect which images were built
                     IMAGES=""
                     if [ "$BUILD_SERVICES" = "true" ]; then
                         IMAGES="esquire/biztree esquire/enyman esquire/pacman esquire/keysmith esquire/gateway"
@@ -231,7 +266,7 @@ pipeline {
             }
         }
 
-        // ── 6. DB Seed (optional) ───────────────────────────────────────────
+        // ── 8. DB Seed (optional) ───────────────────────────────────────────
         stage('DB Seed') {
             when {
                 expression { return params.RUN_DB_SEED }
@@ -240,11 +275,14 @@ pipeline {
                 echo "Running database seed scripts..."
                 sh """
                     cd ${PROJECT_DIR}/esquire.db.seed/postgres
-                    export PGHOST=192.168.1.104
+
+                    # Read DB credentials from .env
+                    source ${ENV_FILE}
+                    export PGHOST=${env.RESOLVED_DB_HOST}
                     export PGPORT=5432
-                    export PGDATABASE=esq2025
-                    export PGUSER=esq2025
-                    export PGPASSWORD=q
+                    export PGDATABASE=\$POSTGRES_DB
+                    export PGUSER=\$POSTGRES_USER
+                    export PGPASSWORD=\$POSTGRES_PASSWORD
 
                     for sql in \$(ls -1 *.sql 2>/dev/null | sort); do
                         echo "Executing \$sql..."
@@ -254,7 +292,7 @@ pipeline {
             }
         }
 
-        // ── 7. Full reset (optional) ────────────────────────────────────────
+        // ── 9. Full reset (optional) ────────────────────────────────────────
         stage('Full Reset') {
             when {
                 expression { return params.FULL_RESET }
@@ -271,25 +309,21 @@ pipeline {
             }
         }
 
-        // ── 8. Apply K8s manifests ──────────────────────────────────────────
+        // ── 10. Apply K8s manifests ─────────────────────────────────────────
         stage('Apply Manifests') {
             steps {
                 echo "Applying Kubernetes manifests..."
-
                 sh """
-                    # Namespace + config
                     kubectl apply -f ${K8S_DIR}/namespace.yaml
                     kubectl apply -f ${K8S_DIR}/configmap.yaml
                     kubectl apply -f ${K8S_DIR}/secret.yaml
                     kubectl apply -f ${K8S_DIR}/postgres-endpoint.yaml
 
-                    # Keycloak realm ConfigMap
                     kubectl create configmap keycloak-realm \
                         --from-file=realm.json=${IMPORT_DIR}/esquire.json \
                         --namespace=${NAMESPACE} \
                         --dry-run=client -o yaml | kubectl apply -f -
 
-                    # All deployments + services
                     kubectl apply -f ${K8S_DIR}/keycloak.yaml
                     kubectl apply -f ${K8S_DIR}/biztree.yaml
                     kubectl apply -f ${K8S_DIR}/enyman.yaml
@@ -301,10 +335,9 @@ pipeline {
             }
         }
 
-        // ── 9. Rolling restart (pick up new images) ─────────────────────────
+        // ── 11. Rolling restart ─────────────────────────────────────────────
         stage('Rolling Restart') {
             steps {
-                echo "Triggering rolling restart for rebuilt services..."
                 script {
                     def restarts = []
                     if (params.BUILD_SERVICES) {
@@ -327,7 +360,7 @@ pipeline {
             }
         }
 
-        // ── 10. Wait for rollouts ───────────────────────────────────────────
+        // ── 12. Wait for rollouts ───────────────────────────────────────────
         stage('Wait for Rollouts') {
             steps {
                 echo "Waiting for Keycloak..."
@@ -350,7 +383,7 @@ pipeline {
             }
         }
 
-        // ── 11. Smoke test ──────────────────────────────────────────────────
+        // ── 13. Smoke test ──────────────────────────────────────────────────
         stage('Smoke Test') {
             steps {
                 sh '''
@@ -395,19 +428,18 @@ pipeline {
                     echo "========================================"
                     echo "  Deployment Complete!"
                     echo "========================================"
-                    echo "  Frontend:  http://192.168.1.104:30200"
-                    echo "  Gateway:   http://192.168.1.104:30000"
-                    echo "  Keycloak:  http://192.168.1.104:30080"
+                    echo "  Frontend:  http://${env.RESOLVED_HOST}:30200"
+                    echo "  Gateway:   http://${env.RESOLVED_HOST}:30000"
+                    echo "  Keycloak:  http://${env.RESOLVED_HOST}:30080"
                     echo "========================================"
                 """
             }
         }
     }
 
-    // ── Post-actions ────────────────────────────────────────────────────────
     post {
         success {
-            echo "Esquire deployed to Kubernetes (commit: ${env.GIT_COMMIT_SHORT})"
+            echo "Esquire deployed to Kubernetes on ${env.RESOLVED_HOST} (commit: ${env.GIT_COMMIT_SHORT})"
         }
         failure {
             echo "Deploy failed! Collecting diagnostics..."

@@ -4,7 +4,7 @@ metadata:
   name: esq-config
   namespace: esquire
 data:
-  DEPLOY_HOST: "192.168.1.104"
+  DEPLOY_HOST: "__DEPLOY_HOST__"
   POSTGRES_DB: "esq2025"
   POSTGRES_USER: "esq2025"
   KEYCLOAK_REALM: "esquire"
