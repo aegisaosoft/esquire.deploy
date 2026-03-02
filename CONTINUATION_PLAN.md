@@ -21,8 +21,14 @@
    - `:30843` → keycloak (:8080)
 5. **Frontend config** — `config.json.template` uses `keycloakUrl` (not `keycloakConfigUrl`), ports 30343/30843
 
+6. **KC_HOSTNAME_BACKCHANNEL_DYNAMIC fix** — added `KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"` to `keycloak.yaml`
+   - Build #9 failed: gateway CrashLoopBackOff due to issuer mismatch
+   - Gateway connects internally at `http://keycloak:8080`, but Keycloak returned issuer `https://<IP>:30843`
+   - This Keycloak 24+ option makes backchannel requests use the request URL as issuer
+   - Internal clients get `http://keycloak:8080/realms/esquire`, browsers get `https://<IP>:30843/realms/esquire`
+
 ### ❌ Not Yet Verified
-1. **Jenkins build has NOT been run yet** after the Docker/kubectl fix
+1. **Build #10** — need to re-run Jenkins after KC_HOSTNAME_BACKCHANNEL_DYNAMIC fix
 2. **Keycloak redirect** not tested end-to-end (was `http://localhost:8080`, should be `https://<IP>:30843`)
 3. **Full pipeline** — Maven build, Docker image build, minikube import, K8s deploy, smoke tests
 
