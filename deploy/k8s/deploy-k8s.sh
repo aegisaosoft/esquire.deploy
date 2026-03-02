@@ -31,6 +31,7 @@ log "Injecting host IPs into manifests..."
 sed -i "s|__DEPLOY_HOST__|${DEPLOY_HOST}|g" "$SCRIPT_DIR/configmap.yaml"
 sed -i "s|__DEPLOY_HOST__|${DEPLOY_HOST}|g" "$SCRIPT_DIR/gateway.yaml"
 sed -i "s|__DEPLOY_HOST__|${DEPLOY_HOST}|g" "$SCRIPT_DIR/frontend.yaml"
+sed -i "s|__DEPLOY_HOST__|${DEPLOY_HOST}|g" "$SCRIPT_DIR/keycloak.yaml"
 sed -i "s|__DB_HOST__|${DB_HOST}|g"         "$SCRIPT_DIR/postgres-endpoint.yaml"
 
 # --- Apply manifests in order ---

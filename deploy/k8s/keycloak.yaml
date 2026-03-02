@@ -33,10 +33,12 @@ spec:
                 secretKeyRef:
                   name: esq-secrets
                   key: KC_ADMIN_PASSWORD
-            - name: KC_HOSTNAME_STRICT_BACKCHANNEL
-              value: "false"
-            - name: KC_HOSTNAME_STRICT_HTTPS
-              value: "false"
+            - name: KC_PROXY_HEADERS
+              value: "xforwarded"
+            - name: KC_HOSTNAME
+              value: "https://__DEPLOY_HOST__:30843"
+            - name: KC_HTTP_ENABLED
+              value: "true"
             - name: KC_HEALTH_ENABLED
               value: "true"
           volumeMounts:
