@@ -559,6 +559,73 @@ pipeline {
                 """
             }
         }
+
+        // ── 14. Port forwarding (minikube only) ──────────────────────────────
+        //    Minikube (Docker driver) exposes NodePorts only on its container IP
+        //    (e.g. 192.168.49.2), not on the host. This stage runs a socat
+        //    forwarder on the host network so all NodePorts are reachable at
+        //    the host IP from browsers on the local network.
+        stage('Port Forwarding') {
+            steps {
+                script {
+                    def runtime = sh(script: "cat ${PROJECT_DIR}/.k8s-runtime", returnStdout: true).trim()
+                    if (runtime == 'minikube') {
+                        env.MINIKUBE_NODE_IP = sh(
+                            script: "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}'",
+                            returnStdout: true
+                        ).trim()
+                        echo "Minikube node IP: ${env.MINIKUBE_NODE_IP}"
+                        echo "Setting up port forwarding: host:30xxx → ${env.MINIKUBE_NODE_IP}:30xxx"
+
+                        // Write forwarding script to /opt/esquire/ (shared host path)
+                        sh """
+                            cat > ${PROJECT_DIR}/port-forward.sh << 'PFEOF'
+#!/bin/sh
+set -e
+apk add --no-cache socat >/dev/null 2>&1
+for PORT in 30000 30080 30200 30443 30343 30843; do
+    socat TCP-LISTEN:\$PORT,fork,reuseaddr TCP:\$TARGET_IP:\$PORT &
+    echo "Forwarding 0.0.0.0:\$PORT -> \$TARGET_IP:\$PORT"
+done
+echo "All port forwards active. Waiting..."
+wait
+PFEOF
+                            chmod +x ${PROJECT_DIR}/port-forward.sh
+                        """
+
+                        sh '''
+                            # Stop any existing forwarder
+                            docker rm -f esquire-port-forward 2>/dev/null || true
+
+                            # Start socat forwarder with host networking
+                            docker run -d --name esquire-port-forward \
+                                --net=host \
+                                --restart=unless-stopped \
+                                -e TARGET_IP="$MINIKUBE_NODE_IP" \
+                                -v /opt/esquire/port-forward.sh:/forward.sh:ro \
+                                alpine sh /forward.sh
+
+                            # Wait for startup and verify
+                            sleep 3
+                            if docker ps --filter name=esquire-port-forward --format '{{.Status}}' | grep -q 'Up'; then
+                                echo "Port forwarding container is running"
+                                docker logs esquire-port-forward 2>&1
+                            else
+                                echo "WARNING: Port forwarding container may have failed:"
+                                docker logs esquire-port-forward 2>&1 || true
+                            fi
+                        '''
+
+                        echo "URLs now accessible at host IP:"
+                        echo "  Frontend (HTTPS): https://${env.RESOLVED_HOST}:30443"
+                        echo "  Gateway  (HTTPS): https://${env.RESOLVED_HOST}:30343"
+                        echo "  Keycloak (HTTPS): https://${env.RESOLVED_HOST}:30843"
+                    } else {
+                        echo "Runtime: ${runtime} — NodePorts are directly accessible, no forwarding needed."
+                    }
+                }
+            }
+        }
     }
 
     post {

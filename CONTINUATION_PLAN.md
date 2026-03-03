@@ -3,7 +3,7 @@
 ## Current State (2026-03-02)
 
 ### ✅ Completed
-1. **Keycloak KC_HOSTNAME fix** — `keycloak.yaml` has `KC_HOSTNAME: "https://__DEPLOY_HOST__:30843"`, `KC_PROXY_HEADERS: "xforwarded"`
+1. **Keycloak KC_HOSTNAME fix** — removed `KC_HOSTNAME` from `keycloak.yaml` (was forcing external issuer for all requests)
 2. **Jenkinsfile fixes** (commit `e149a8e` on GitHub):
    - Default branches changed from `main` → `develop` (all 3 repos use `develop`)
    - Container-aware IP detection: uses `docker run --net=host busybox` when inside Docker
@@ -30,42 +30,40 @@
      - External (browser via proxy with `X-Forwarded-*`): issuer = `https://<IP>:30843/realms/esquire` ✓
    - Safe because resource server uses `jwk-set-uri` (signature-only validation, no `iss` claim check)
    - Also removed sed hack from Jenkinsfile and keycloak.yaml sed from Configure stage (no more `__DEPLOY_HOST__` placeholder in keycloak.yaml)
+   - **Build #12: SUCCESS** — all pods Running, smoke tests pass
+
+7. **Port forwarding (minikube)** — added stage 14 to Jenkinsfile
+   - Problem: minikube Docker driver exposes NodePorts only on container IP (192.168.49.2), not host IP (192.168.1.104) → URLs inaccessible from browser
+   - Fix: new "Port Forwarding" stage runs a `socat` container with `--net=host` that forwards all 6 NodePorts from host to minikube:
+     - 30000 (gateway HTTP), 30080 (keycloak HTTP), 30200 (frontend HTTP)
+     - 30443 (frontend HTTPS), 30343 (gateway HTTPS), 30843 (keycloak HTTPS)
+   - Container name: `esquire-port-forward`, `--restart=unless-stopped` (survives reboots)
+   - Only activates for minikube runtime (other runtimes expose NodePorts directly)
 
 ### ❌ Not Yet Verified
-1. **Build #12** — need to re-run Jenkins after KC_HOSTNAME removal
-2. **Keycloak redirect** not tested end-to-end (should redirect to `https://<IP>:30843`)
-3. **Full pipeline** — Maven build, Docker image build, minikube import, K8s deploy, smoke tests
+1. **Build #13** — need to re-run Jenkins with port forwarding stage
+2. **Browser access** — verify `https://192.168.1.104:30443` works from Windows browser
+3. **Keycloak redirect** — end-to-end login flow via HTTPS proxy
+4. **Port forwarding persistence** — verify `esquire-port-forward` container survives host reboot
 
 ---
 
 ## Next Steps
 
-### Step 1: Run Jenkins Build
-- Go to Jenkins UI (http://192.168.1.104:8888 or whatever the Jenkins URL is)
-- Run build with parameters:
-  - `DEPLOY_HOST`: `192.168.1.104` (or leave empty to auto-detect)
-  - `BUILD_SERVICES`: true
-  - `BUILD_FRONTEND`: true
-  - All other defaults
-- Monitor console output for errors
+### Step 1: Run Jenkins Build #13
+- Go to Jenkins UI
+- Run build with default parameters (auto-detect IP, BUILD_SERVICES + BUILD_FRONTEND = true)
+- Watch for new "Port Forwarding" stage after Smoke Test
+- After success, test URLs from Windows browser
 
-### Step 2: Expected Issues / Watch Points
-1. **Maven Build stage** — first build may be slow (downloads deps to `esquire-maven-cache` Docker volume)
-2. **Docker image builds** — check that Dockerfiles exist and are correct in all service dirs
-3. **Minikube image import** — `docker save | docker exec -i minikube ctr` can be slow for large images
-4. **Apply Manifests** — check that all YAML files exist in `/opt/esquire/deploy/k8s/`
-5. **Keycloak startup** — takes 30-60s, readiness probe at `/health/ready:9000`
-6. **Frontend compilation** — `ng serve` takes time; smoke test at :30200 may show non-200 initially (this is OK, pipeline allows it)
-7. **Post-failure diagnostics** — if build fails, `post { failure }` kubectl commands may hang ~2.5 min each; consider adding `--timeout` or `timeout` wrapper
-
-### Step 3: Verify Keycloak Redirect
+### Step 2: Verify Browser Access
 After successful deploy:
-1. Open `https://<IP>:30443` in browser (accept self-signed cert)
+1. Open `https://192.168.1.104:30443` in browser (accept self-signed cert)
 2. Should see Angular app → click Login
-3. Should redirect to `https://<IP>:30843/realms/esquire/protocol/openid-connect/auth?...`
-4. NOT `http://localhost:8080/...` ← this was the original bug
+3. Should redirect to `https://192.168.1.104:30843/realms/esquire/protocol/openid-connect/auth?...`
+4. NOT `http://localhost:8080/...` (that was the original bug)
 
-### Step 4: Make Jenkins Networking Permanent
+### Step 3: Make Jenkins Networking Permanent
 Currently `docker network connect minikube jenkins` is lost on Jenkins container restart.
 Fix: update Jenkins container creation command to include `--network minikube`:
 ```bash
@@ -74,19 +72,6 @@ docker run -d --name jenkins --network minikube ...
 
 # Option B: Use docker-compose with networks
 # Option C: Add to a startup script that runs after docker start
-```
-
-### Step 5: Post-Failure Diagnostics Timeout
-Add timeouts to `post { failure }` block to prevent 5+ minute hangs:
-```groovy
-post {
-    failure {
-        sh """
-            timeout 15 kubectl get pods -n ${NAMESPACE} -o wide 2>/dev/null || true
-            timeout 15 kubectl get events -n ${NAMESPACE} --sort-by='.lastTimestamp' 2>/dev/null | tail -20 || true
-        """
-    }
-}
 ```
 
 ---
@@ -104,6 +89,10 @@ Browser → https://<IP>:30443 (nginx proxy)
 
 Keycloak → https://<IP>:30843 (nginx proxy → keycloak:8080)
 PostgreSQL → external (DEPLOY_HOST:5432)
+
+Port forwarding (minikube only):
+  Host (0.0.0.0:30xxx) → socat → minikube (192.168.49.x:30xxx)
+  Container: esquire-port-forward (alpine + socat, --net=host)
 ```
 
 ## Key Files
