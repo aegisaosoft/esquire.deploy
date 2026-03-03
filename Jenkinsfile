@@ -42,6 +42,8 @@ pipeline {
             description: 'Run DB seed scripts (esquire.db.seed)')
         booleanParam(name: 'FULL_RESET',     defaultValue: false,
             description: 'Delete K8s namespace and redeploy from scratch (WARNING: destroys Keycloak data)')
+        booleanParam(name: 'GENERATE_CERTS', defaultValue: false,
+            description: 'Generate fresh TLS certificate for DEPLOY_HOST (otherwise uses pre-built mkcert cert)')
 
         // ── Branch overrides ──────────────────────────────────────────────────
         string(name: 'BRANCH_SERVICES', defaultValue: 'develop', description: 'Branch for esquire.services')
@@ -202,6 +204,31 @@ pipeline {
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/frontend.yaml
                     sed -i 's|__DB_HOST__|${env.RESOLVED_DB_HOST}|g'  ${K8S_DIR}/postgres-endpoint.yaml
                 """
+
+                // TLS certificate: generate or reuse from persistent store
+                script {
+                    def certDir = "${PROJECT_DIR}/certs"
+                    def proxyDir = "${PROJECT_DIR}/deploy/proxy"
+                    if (params.GENERATE_CERTS) {
+                        echo "Generating TLS certificate for ${env.RESOLVED_HOST}..."
+                        sh """
+                            mkdir -p ${certDir}
+                            openssl req -x509 -nodes -days 825 \
+                                -newkey rsa:2048 \
+                                -keyout ${certDir}/esquire.key \
+                                -out    ${certDir}/esquire.crt \
+                                -subj   "/CN=${env.RESOLVED_HOST}/O=Esquire/C=US" \
+                                -addext "subjectAltName=DNS:localhost,IP:${env.RESOLVED_HOST},IP:127.0.0.1"
+                            cp ${certDir}/esquire.crt ${certDir}/esquire.key ${proxyDir}/
+                            echo "Certificate generated and saved for IP: ${env.RESOLVED_HOST}"
+                        """
+                    } else if (sh(script: "test -f ${certDir}/esquire.crt && test -f ${certDir}/esquire.key", returnStatus: true) == 0) {
+                        echo "Reusing previously generated certificate from ${certDir}..."
+                        sh "cp ${certDir}/esquire.crt ${certDir}/esquire.key ${proxyDir}/"
+                    } else {
+                        echo "Using pre-built mkcert certificate from repo."
+                    }
+                }
             }
         }
 
