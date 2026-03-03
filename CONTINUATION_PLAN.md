@@ -24,11 +24,14 @@
 6. **KC_HOSTNAME_BACKCHANNEL_DYNAMIC fix** — added `KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"` to `keycloak.yaml`
    - Build #9 failed: gateway CrashLoopBackOff due to issuer mismatch
    - Gateway connects internally at `http://keycloak:8080`, but Keycloak returned issuer `https://<IP>:30843`
-   - This Keycloak 24+ option makes backchannel requests use the request URL as issuer
-   - Internal clients get `http://keycloak:8080/realms/esquire`, browsers get `https://<IP>:30843/realms/esquire`
+   - ⚠️ Build #10 FAILED — `KC_HOSTNAME_BACKCHANNEL_DYNAMIC` does NOT work with `start-dev` mode (Keycloak ignores it)
+7. **Gateway issuer-uri sed fix** — Jenkinsfile Configure stage now removes `issuer-uri` from gateway's application.yml
+   - Root cause: Spring Security OIDC discovery validates issuer, which mismatches in K8s
+   - Fix: Remove `issuer-uri` so Spring Boot uses the explicitly configured endpoints (authorization-uri, token-uri, jwk-set-uri, user-info-uri) without OIDC discovery
+   - The sed targets `issuer-uri: http://${KEYCLOAK_HOST` lines in application.yml before Maven build
 
 ### ❌ Not Yet Verified
-1. **Build #10** — need to re-run Jenkins after KC_HOSTNAME_BACKCHANNEL_DYNAMIC fix
+1. **Build #11** — need to re-run Jenkins after issuer-uri sed fix
 2. **Keycloak redirect** not tested end-to-end (was `http://localhost:8080`, should be `https://<IP>:30843`)
 3. **Full pipeline** — Maven build, Docker image build, minikube import, K8s deploy, smoke tests
 

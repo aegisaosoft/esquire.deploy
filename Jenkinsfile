@@ -202,6 +202,15 @@ pipeline {
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/frontend.yaml
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/keycloak.yaml
                     sed -i 's|__DB_HOST__|${env.RESOLVED_DB_HOST}|g'  ${K8S_DIR}/postgres-endpoint.yaml
+
+                    # Gateway: remove issuer-uri to prevent OIDC discovery issuer mismatch
+                    # (all OAuth2 endpoints are explicitly configured in application.yml,
+                    #  so Spring Boot will use them directly without OIDC discovery)
+                    GW_APP_YML=${PROJECT_DIR}/esquire.services/gateway/src/main/resources/application.yml
+                    if [ -f "\$GW_APP_YML" ]; then
+                        sed -i '/issuer-uri: http:\\/\\/\${KEYCLOAK_HOST/d' "\$GW_APP_YML"
+                        echo "Removed issuer-uri from gateway application.yml"
+                    fi
                 """
             }
         }
