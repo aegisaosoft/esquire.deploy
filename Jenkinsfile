@@ -44,6 +44,8 @@ pipeline {
             description: 'Delete K8s namespace and redeploy from scratch (WARNING: destroys Keycloak data)')
         booleanParam(name: 'GENERATE_CERTS', defaultValue: false,
             description: 'Generate fresh TLS certificate for DEPLOY_HOST (otherwise uses pre-built mkcert cert)')
+        booleanParam(name: 'ENABLE_DASHBOARD', defaultValue: false,
+            description: 'Enable Minikube Dashboard (accessible at http://DEPLOY_HOST:30900)')
 
         // ── Branch overrides ──────────────────────────────────────────────────
         string(name: 'BRANCH_SERVICES', defaultValue: 'develop', description: 'Branch for esquire.services')
@@ -650,6 +652,62 @@ PFEOF
                     } else {
                         echo "Runtime: ${runtime} — NodePorts are directly accessible, no forwarding needed."
                     }
+                }
+            }
+        }
+
+        // ── 15. Minikube Dashboard (optional) ────────────────────────────────
+        //    Enables the K8s dashboard addon and exposes it via NodePort 30900.
+        //    For minikube: also adds the port to socat forwarder.
+        stage('Dashboard') {
+            when {
+                expression { return params.ENABLE_DASHBOARD }
+            }
+            steps {
+                script {
+                    def runtime = sh(script: "cat ${PROJECT_DIR}/.k8s-runtime", returnStdout: true).trim()
+
+                    echo "Enabling Kubernetes Dashboard..."
+                    if (runtime == 'minikube') {
+                        sh """
+                            minikube addons enable dashboard 2>/dev/null || \
+                                docker exec minikube minikube addons enable dashboard
+                            minikube addons enable metrics-server 2>/dev/null || \
+                                docker exec minikube minikube addons enable metrics-server || true
+                        """
+                    } else {
+                        // For non-minikube: install dashboard via kubectl
+                        sh """
+                            kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml || true
+                        """
+                    }
+
+                    // Wait for dashboard pod to be ready
+                    sh """
+                        kubectl rollout status deployment/kubernetes-dashboard \
+                            -n kubernetes-dashboard --timeout=90s || true
+                    """
+
+                    // Patch dashboard service to NodePort 30900
+                    sh '''
+                        kubectl patch svc kubernetes-dashboard -n kubernetes-dashboard \
+                            -p '{"spec":{"type":"NodePort","ports":[{"port":443,"targetPort":8443,"nodePort":30900}]}}' \
+                            2>/dev/null || \
+                        kubectl patch svc kubernetes-dashboard -n kubernetes-dashboard \
+                            -p '{"spec":{"type":"NodePort","ports":[{"port":80,"targetPort":9090,"nodePort":30900}]}}' \
+                            2>/dev/null || true
+                    '''
+
+                    // For minikube: add port 30900 to socat forwarder
+                    if (runtime == 'minikube' && env.MINIKUBE_NODE_IP) {
+                        sh """
+                            docker exec -d esquire-port-forward \
+                                socat TCP-LISTEN:30900,fork,reuseaddr TCP:${env.MINIKUBE_NODE_IP}:30900 \
+                                2>/dev/null || true
+                        """
+                    }
+
+                    echo "Dashboard: http://${env.RESOLVED_HOST}:30900"
                 }
             }
         }
