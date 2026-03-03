@@ -21,18 +21,19 @@
    - `:30843` → keycloak (:8080)
 5. **Frontend config** — `config.json.template` uses `keycloakUrl` (not `keycloakConfigUrl`), ports 30343/30843
 
-6. **KC_HOSTNAME_BACKCHANNEL_DYNAMIC fix** — added `KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"` to `keycloak.yaml`
-   - Build #9 failed: gateway CrashLoopBackOff due to issuer mismatch
-   - Gateway connects internally at `http://keycloak:8080`, but Keycloak returned issuer `https://<IP>:30843`
-   - ⚠️ Build #10 FAILED — `KC_HOSTNAME_BACKCHANNEL_DYNAMIC` does NOT work with `start-dev` mode (Keycloak ignores it)
-7. **Gateway issuer-uri sed fix** — Jenkinsfile Configure stage now removes `issuer-uri` from gateway's application.yml
-   - Root cause: Spring Security OIDC discovery validates issuer, which mismatches in K8s
-   - Fix: Remove `issuer-uri` so Spring Boot uses the explicitly configured endpoints (authorization-uri, token-uri, jwk-set-uri, user-info-uri) without OIDC discovery
-   - The sed targets `issuer-uri: http://${KEYCLOAK_HOST` lines in application.yml before Maven build
+6. **Issuer mismatch fix** — builds #9–#11 all failed with gateway CrashLoopBackOff
+   - Problem: `KC_HOSTNAME` forced Keycloak to return external issuer (`https://<IP>:30843`) for ALL requests, including internal gateway → Spring Security OIDC discovery rejected mismatch
+   - Failed attempt 1 (build #10): `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true` — ignored in `start-dev` mode
+   - Failed attempt 2 (build #11): Jenkinsfile sed to remove `issuer-uri` — unreliable with multi-stage Docker builds (Docker cache)
+   - **Final fix**: Removed `KC_HOSTNAME` and `KC_HOSTNAME_BACKCHANNEL_DYNAMIC` from `keycloak.yaml`. Without `KC_HOSTNAME`, Keycloak in `start-dev` mode dynamically resolves issuer from each request:
+     - Internal (gateway → `http://keycloak:8080`): issuer = `http://keycloak:8080/realms/esquire` ✓
+     - External (browser via proxy with `X-Forwarded-*`): issuer = `https://<IP>:30843/realms/esquire` ✓
+   - Safe because resource server uses `jwk-set-uri` (signature-only validation, no `iss` claim check)
+   - Also removed sed hack from Jenkinsfile and keycloak.yaml sed from Configure stage (no more `__DEPLOY_HOST__` placeholder in keycloak.yaml)
 
 ### ❌ Not Yet Verified
-1. **Build #11** — need to re-run Jenkins after issuer-uri sed fix
-2. **Keycloak redirect** not tested end-to-end (was `http://localhost:8080`, should be `https://<IP>:30843`)
+1. **Build #12** — need to re-run Jenkins after KC_HOSTNAME removal
+2. **Keycloak redirect** not tested end-to-end (should redirect to `https://<IP>:30843`)
 3. **Full pipeline** — Maven build, Docker image build, minikube import, K8s deploy, smoke tests
 
 ---
