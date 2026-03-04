@@ -1,6 +1,6 @@
 # Esquire Deploy — Continuation Plan
 
-## Current State (2026-03-02)
+## Current State (2026-03-03)
 
 ### ✅ Completed
 1. **Keycloak KC_HOSTNAME fix** — removed `KC_HOSTNAME` from `keycloak.yaml` (was forcing external issuer for all requests)
@@ -40,39 +40,49 @@
    - Container name: `esquire-port-forward`, `--restart=unless-stopped` (survives reboots)
    - Only activates for minikube runtime (other runtimes expose NodePorts directly)
 
+8. **Build #15: SUCCESS** — all pods Running, URLs accessible from Windows browser
+
+9. **Login flow fix** (2026-03-03) — 3 issues fixed:
+   - **Proxy headers** (`proxy.yaml`): Keycloak block used `$host:$server_port` (sent internal port 8443 instead of external NodePort 30843). Fixed: `$http_host` preserves original Host header (`192.168.1.104:30843`). Removed `X-Forwarded-Port`. Also fixed gateway block.
+   - **Keycloak redirectUris** (`esquire.json`): `esq-angular` client had hardcoded `http://localhost:4200` in redirectUris/webOrigins → Keycloak rejected `redirect_uri=https://IP:30443`. Fixed: added `https://__DEPLOY_HOST__:30443` patterns + sed in Jenkinsfile Configure stage.
+   - **checkLoginIframe** (`esquire.explorer/main.ts`): `checkLoginIframe: true` caused "Timeout when waiting for 3rd party check iframe message" — cross-port iframe (30443→30843) unreliable with self-signed certs. Fixed: `checkLoginIframe: false`.
+   - Commits: esquire.deploy `217cba4`, esquire.explorer `ccf7df2`
+
 ### ❌ Not Yet Verified
-1. **Build #13** — need to re-run Jenkins with port forwarding stage
-2. **Browser access** — verify `https://192.168.1.104:30443` works from Windows browser
-3. **Keycloak redirect** — end-to-end login flow via HTTPS proxy
-4. **Port forwarding persistence** — verify `esquire-port-forward` container survives host reboot
+1. **Build #16** — need to run with `FULL_RESET=true` to pick up all fixes (especially Keycloak realm reimport with corrected redirectUris + admin password reset)
+2. **End-to-end login** — verify full OIDC flow: Angular → Keycloak login page → redirect back with token
+3. **Keycloak HTTPS console** — `https://192.168.1.104:30843` should show admin UI (not redirect to :8443)
+4. **Keycloak admin login** — credentials from K8s secret should work after FULL_RESET
 
 ---
 
 ## Next Steps
 
-### Step 1: Run Jenkins Build #13
+### Step 1: Run Jenkins Build #16 with FULL_RESET
 - Go to Jenkins UI
-- Run build with default parameters (auto-detect IP, BUILD_SERVICES + BUILD_FRONTEND = true)
-- Watch for new "Port Forwarding" stage after Smoke Test
-- After success, test URLs from Windows browser
+- Set `FULL_RESET=true` (this destroys and recreates the `esquire` namespace → reimports Keycloak realm with fixed redirectUris + resets admin credentials)
+- Set `BUILD_SERVICES=true`, `BUILD_FRONTEND=true`
+- Watch all stages
 
-### Step 2: Verify Browser Access
-After successful deploy:
-1. Open `https://192.168.1.104:30443` in browser (accept self-signed cert)
-2. Should see Angular app → click Login
-3. Should redirect to `https://192.168.1.104:30843/realms/esquire/protocol/openid-connect/auth?...`
-4. NOT `http://localhost:8080/...` (that was the original bug)
+### Step 2: Verify Keycloak HTTPS
+1. Open `https://192.168.1.104:30843` (accept self-signed cert)
+2. Should show Keycloak admin console login page (NOT redirect to `:8443`)
+3. Log in with admin credentials from `.env`
 
-### Step 3: Make Jenkins Networking Permanent
+### Step 3: Verify End-to-End Login
+1. Open `https://192.168.1.104:30443` (accept self-signed cert)
+2. App should load without "Timeout waiting for iframe" error in console
+3. Click Login → should redirect to `https://192.168.1.104:30843/realms/esquire/protocol/openid-connect/auth?...`
+4. Log in → should redirect back to `https://192.168.1.104:30443` with valid token
+
+### Step 4: Diagnostics (if login fails)
+- Check frontend pod logs: `kubectl logs deployment/frontend -n esquire` — look for `==> config.json:` to verify envsubst output
+- Check Keycloak pod logs for redirect/CORS errors
+- Verify `esq-angular` client in Keycloak admin: Clients → esq-angular → Valid redirect URIs should include `https://192.168.1.104:30443/*`
+
+### Step 5: Make Jenkins Networking Permanent
 Currently `docker network connect minikube jenkins` is lost on Jenkins container restart.
-Fix: update Jenkins container creation command to include `--network minikube`:
-```bash
-# Option A: Add to docker run command
-docker run -d --name jenkins --network minikube ...
-
-# Option B: Use docker-compose with networks
-# Option C: Add to a startup script that runs after docker start
-```
+Fix: update Jenkins container creation command to include `--network minikube`.
 
 ---
 
