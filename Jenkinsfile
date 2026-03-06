@@ -44,7 +44,7 @@ pipeline {
             description: 'Delete K8s namespace and redeploy from scratch (WARNING: destroys Keycloak data)')
         booleanParam(name: 'GENERATE_CERTS', defaultValue: false,
             description: 'Generate fresh TLS certificate for DEPLOY_HOST (otherwise uses pre-built mkcert cert)')
-        booleanParam(name: 'ENABLE_DASHBOARD', defaultValue: false,
+        booleanParam(name: 'ENABLE_DASHBOARD', defaultValue: true,
             description: 'Enable Minikube Dashboard (accessible at http://DEPLOY_HOST:30900)')
 
         // ── Branch overrides ──────────────────────────────────────────────────
