@@ -204,7 +204,6 @@ pipeline {
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/configmap.yaml
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/gateway.yaml
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/frontend.yaml
-                    sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/keycloak.yaml
                     sed -i 's|__DB_HOST__|${env.RESOLVED_DB_HOST}|g'  ${K8S_DIR}/postgres-endpoint.yaml
 
                     # Keycloak realm import — replace __DEPLOY_HOST__ in redirectUris/webOrigins

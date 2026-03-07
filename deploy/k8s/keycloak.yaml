@@ -33,10 +33,6 @@ spec:
                 secretKeyRef:
                   name: esq-secrets
                   key: KC_ADMIN_PASSWORD
-            - name: KC_HOSTNAME
-              value: "https://__DEPLOY_HOST__:30843"
-            - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
-              value: "true"
             - name: KC_PROXY_HEADERS
               value: "xforwarded"
             - name: KC_HTTP_ENABLED
