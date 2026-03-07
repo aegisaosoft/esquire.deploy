@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mainshell
+  namespace: esquire
+  labels:
+    app: mainshell
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mainshell
+  template:
+    metadata:
+      labels:
+        app: mainshell
+    spec:
+      containers:
+        - name: mainshell
+          image: esquire/mainshell:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: KEYCLOAK_URL
+              value: "https://__DEPLOY_HOST__:30843"
+            - name: KEYCLOAK_REALM
+              valueFrom:
+                configMapKeyRef:
+                  name: esq-config
+                  key: KEYCLOAK_REALM
+            - name: KEYCLOAK_CLIENT_ID
+              value: "esq-react"
+            - name: GATEWAY_URL
+              value: "http://gateway:7070"
+            - name: PLUGINS_CONFIG_FILE
+              value: "/app/plugins.config.json"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mainshell
+  namespace: esquire
+spec:
+  type: NodePort
+  selector:
+    app: mainshell
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30300

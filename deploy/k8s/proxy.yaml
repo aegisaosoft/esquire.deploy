@@ -73,6 +73,26 @@ data:
             }
         }
 
+        # ── Mainshell (React) ── HTTPS :5443 ──
+        server {
+            listen 5443 ssl;
+            server_name _;
+
+            ssl_certificate     /etc/nginx/certs/self-signed.crt;
+            ssl_certificate_key /etc/nginx/certs/self-signed.key;
+
+            location / {
+                proxy_pass http://mainshell:3000;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade    $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host       $host;
+                proxy_set_header X-Real-IP  $remote_addr;
+                proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto https;
+            }
+        }
+
         # ── Keycloak ── HTTPS :8443 ──
         server {
             listen 8443 ssl;
@@ -120,6 +140,7 @@ spec:
           ports:
             - containerPort: 443
             - containerPort: 3443
+            - containerPort: 5443
             - containerPort: 8443
           env:
             - name: DEPLOY_HOST
@@ -154,6 +175,10 @@ spec:
       port: 3443
       targetPort: 3443
       nodePort: 30343
+    - name: https-mainshell
+      port: 5443
+      targetPort: 5443
+      nodePort: 30543
     - name: https-keycloak
       port: 8443
       targetPort: 8443

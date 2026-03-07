@@ -2,10 +2,11 @@
 // Esquire Frameworks — Jenkins CI/CD Pipeline (Kubernetes, Multi-Repo)
 //
 // Fully parameterized — deploys to ANY Linux host.
-// Clones 3 repos from mir0n-pro → builds Docker images → deploys to K8s.
+// Clones repos from mir0n-pro/aegisaosoft → builds Docker images → deploys to K8s.
 //
 // Repo layout in workspace:
 //   $WORKSPACE/
+//   ├── esquire.mainshell/   ← git repo 0 (React mainshell)
 //   ├── esquire.services/    ← git repo 1 (backend Java microservices)
 //   ├── esquire.explorer/    ← git repo 2 (Angular frontend)
 //   ├── esquire.db.seed/     ← git repo 3 (DB seed scripts)
@@ -34,9 +35,11 @@ pipeline {
             description: 'Container registry (e.g. myregistry:5000). Empty = local images for minikube/microk8s/k3s')
 
         // ── Which repos to rebuild ────────────────────────────────────────────
-        booleanParam(name: 'BUILD_SERVICES', defaultValue: true,
+        booleanParam(name: 'BUILD_MAINSHELL', defaultValue: true,
+            description: 'Build React mainshell (esquire.mainshell)')
+        booleanParam(name: 'BUILD_SERVICES', defaultValue: false,
             description: 'Build backend microservices (bizTree, enyMan, pacMan, keySmith, gateway)')
-        booleanParam(name: 'BUILD_FRONTEND', defaultValue: true,
+        booleanParam(name: 'BUILD_FRONTEND', defaultValue: false,
             description: 'Build Angular frontend')
         booleanParam(name: 'RUN_DB_SEED',    defaultValue: false,
             description: 'Run DB seed scripts (esquire.db.seed)')
@@ -48,14 +51,16 @@ pipeline {
             description: 'Enable Minikube Dashboard (accessible at http://DEPLOY_HOST:30900)')
 
         // ── Branch overrides ──────────────────────────────────────────────────
-        string(name: 'BRANCH_SERVICES', defaultValue: 'develop', description: 'Branch for esquire.services')
-        string(name: 'BRANCH_EXPLORER', defaultValue: 'develop', description: 'Branch for esquire.explorer')
-        string(name: 'BRANCH_DB_SEED',  defaultValue: 'develop', description: 'Branch for esquire.db.seed')
+        string(name: 'BRANCH_MAINSHELL', defaultValue: 'develop', description: 'Branch for esquire.mainshell')
+        string(name: 'BRANCH_SERVICES',  defaultValue: 'develop', description: 'Branch for esquire.services')
+        string(name: 'BRANCH_EXPLORER',  defaultValue: 'develop', description: 'Branch for esquire.explorer')
+        string(name: 'BRANCH_DB_SEED',   defaultValue: 'develop', description: 'Branch for esquire.db.seed')
     }
 
     environment {
-        // GitHub — services from mir0n-pro, deploy repo from aegisaosoft
-        GITHUB_SERVICES_ORG = 'mir0n-pro'
+        // GitHub — services from mir0n-pro, mainshell from aegisaosoft
+        GITHUB_SERVICES_ORG   = 'mir0n-pro'
+        GITHUB_MAINSHELL_ORG  = 'aegisaosoft'
 
         // Paths on server
         PROJECT_DIR = '/opt/esquire'
@@ -80,6 +85,14 @@ pipeline {
                             env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                         }
                         echo "Deploy repo commit: ${env.GIT_COMMIT_SHORT}"
+                    }
+                }
+                stage('esquire.mainshell') {
+                    steps {
+                        dir('esquire.mainshell') {
+                            git url: "https://github.com/${GITHUB_MAINSHELL_ORG}/esquire.mainshell.git",
+                                branch: "${params.BRANCH_MAINSHELL}"
+                        }
                     }
                 }
                 stage('esquire.services') {
@@ -165,6 +178,11 @@ pipeline {
         stage('Sync') {
             steps {
                 sh """
+                    # esquire.mainshell — overwrite only
+                    mkdir -p ${PROJECT_DIR}/esquire.mainshell
+                    tar cf - --exclude='.git' --exclude='node_modules' --exclude='.vscode' \
+                        -C esquire.mainshell . | tar xf - -C ${PROJECT_DIR}/esquire.mainshell/
+
                     # esquire.services — overwrite only (target/ is root-owned from Maven, excluded anyway)
                     mkdir -p ${PROJECT_DIR}/esquire.services
                     tar cf - --exclude='.git' --exclude='target' --exclude='.idea' --exclude='*.iml' \
@@ -204,6 +222,7 @@ pipeline {
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/configmap.yaml
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/gateway.yaml
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/frontend.yaml
+                    sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/mainshell.yaml
                     sed -i 's|__DB_HOST__|${env.RESOLVED_DB_HOST}|g'  ${K8S_DIR}/postgres-endpoint.yaml
 
                     # Keycloak realm import — replace __DEPLOY_HOST__ in redirectUris/webOrigins
@@ -337,6 +356,12 @@ pipeline {
                         }
                     }
                 }
+                stage('mainshell') {
+                    when { expression { return params.BUILD_MAINSHELL } }
+                    steps {
+                        sh "docker build --no-cache -t esquire/mainshell:${IMAGE_TAG} ${PROJECT_DIR}/esquire.mainshell"
+                    }
+                }
                 stage('frontend') {
                     when { expression { return params.BUILD_FRONTEND } }
                     steps {
@@ -354,13 +379,16 @@ pipeline {
         // ── 7. Import images into K8s runtime ───────────────────────────────
         stage('Import Images') {
             when {
-                expression { return params.BUILD_SERVICES || params.BUILD_FRONTEND }
+                expression { return params.BUILD_MAINSHELL || params.BUILD_SERVICES || params.BUILD_FRONTEND }
             }
             steps {
                 sh '''
                     RUNTIME=$(cat /opt/esquire/.k8s-runtime)
 
                     IMAGES="esquire/proxy"
+                    if [ "$BUILD_MAINSHELL" = "true" ]; then
+                        IMAGES="$IMAGES esquire/mainshell"
+                    fi
                     if [ "$BUILD_SERVICES" = "true" ]; then
                         IMAGES="$IMAGES esquire/biztree esquire/enyman esquire/pacman esquire/keysmith esquire/gateway"
                     fi
@@ -470,6 +498,7 @@ pipeline {
                     kubectl apply -f ${K8S_DIR}/keysmith.yaml
                     kubectl apply -f ${K8S_DIR}/gateway.yaml
                     kubectl apply -f ${K8S_DIR}/frontend.yaml
+                    kubectl apply -f ${K8S_DIR}/mainshell.yaml
                     kubectl apply -f ${K8S_DIR}/proxy.yaml
                 """
             }
@@ -482,6 +511,9 @@ pipeline {
                     def restarts = []
                     if (params.BUILD_SERVICES) {
                         restarts += ['biztree', 'enyman', 'pacman', 'keysmith', 'gateway']
+                    }
+                    if (params.BUILD_MAINSHELL) {
+                        restarts += ['mainshell']
                     }
                     if (params.BUILD_FRONTEND) {
                         restarts += ['frontend']
@@ -522,6 +554,9 @@ pipeline {
                 echo "Waiting for Frontend..."
                 sh "kubectl rollout status deployment/frontend -n ${NAMESPACE} --timeout=180s"
 
+                echo "Waiting for Mainshell..."
+                sh "kubectl rollout status deployment/mainshell -n ${NAMESPACE} --timeout=180s"
+
                 echo "Waiting for HTTPS Proxy..."
                 sh "kubectl rollout status deployment/proxy -n ${NAMESPACE} --timeout=60s"
             }
@@ -552,6 +587,14 @@ pipeline {
                         echo "Frontend -> $STATUS (may still be compiling)"
                     fi
 
+                    echo "Testing Mainshell via NodePort :30300..."
+                    STATUS=$(curl -so /dev/null -w "%{http_code}" --connect-timeout 5 http://$NODE_IP:30300 2>/dev/null || echo "000")
+                    if [ "$STATUS" = "200" ]; then
+                        echo "Mainshell -> 200 OK"
+                    else
+                        echo "Mainshell -> $STATUS (may still be starting)"
+                    fi
+
                     echo "Testing Keycloak via NodePort :30080..."
                     STATUS=$(curl -so /dev/null -w "%{http_code}" --connect-timeout 5 http://$NODE_IP:30080/health/ready 2>/dev/null || echo "000")
                     if [ "$STATUS" = "200" ]; then
@@ -576,13 +619,15 @@ pipeline {
                     echo "========================================"
                     echo "  Deployment Complete!"
                     echo "========================================"
-                    echo "  Frontend (HTTPS):  https://${env.RESOLVED_HOST}:30443"
-                    echo "  Gateway  (HTTPS):  https://${env.RESOLVED_HOST}:30343"
-                    echo "  Keycloak (HTTPS):  https://${env.RESOLVED_HOST}:30843"
+                    echo "  Mainshell (HTTPS): https://${env.RESOLVED_HOST}:30543"
+                    echo "  Frontend  (HTTPS): https://${env.RESOLVED_HOST}:30443"
+                    echo "  Gateway   (HTTPS): https://${env.RESOLVED_HOST}:30343"
+                    echo "  Keycloak  (HTTPS): https://${env.RESOLVED_HOST}:30843"
                     echo ""
-                    echo "  Frontend (HTTP):   http://${env.RESOLVED_HOST}:30200"
-                    echo "  Gateway  (HTTP):   http://${env.RESOLVED_HOST}:30000"
-                    echo "  Keycloak (HTTP):   http://${env.RESOLVED_HOST}:30080"
+                    echo "  Mainshell (HTTP):  http://${env.RESOLVED_HOST}:30300"
+                    echo "  Frontend  (HTTP):  http://${env.RESOLVED_HOST}:30200"
+                    echo "  Gateway   (HTTP):  http://${env.RESOLVED_HOST}:30000"
+                    echo "  Keycloak  (HTTP):  http://${env.RESOLVED_HOST}:30080"
                     echo "========================================"
                 """
             }
@@ -611,7 +656,7 @@ pipeline {
 #!/bin/sh
 set -e
 apk add --no-cache socat >/dev/null 2>&1
-for PORT in 30000 30080 30200 30443 30343 30843; do
+for PORT in 30000 30080 30200 30300 30443 30343 30543 30843; do
     socat TCP-LISTEN:\$PORT,fork,reuseaddr TCP:\$TARGET_IP:\$PORT &
     echo "Forwarding 0.0.0.0:\$PORT -> \$TARGET_IP:\$PORT"
 done
@@ -645,9 +690,10 @@ PFEOF
                         '''
 
                         echo "URLs now accessible at host IP:"
-                        echo "  Frontend (HTTPS): https://${env.RESOLVED_HOST}:30443"
-                        echo "  Gateway  (HTTPS): https://${env.RESOLVED_HOST}:30343"
-                        echo "  Keycloak (HTTPS): https://${env.RESOLVED_HOST}:30843"
+                        echo "  Mainshell (HTTPS): https://${env.RESOLVED_HOST}:30543"
+                        echo "  Frontend  (HTTPS): https://${env.RESOLVED_HOST}:30443"
+                        echo "  Gateway   (HTTPS): https://${env.RESOLVED_HOST}:30343"
+                        echo "  Keycloak  (HTTPS): https://${env.RESOLVED_HOST}:30843"
                     } else {
                         echo "Runtime: ${runtime} — NodePorts are directly accessible, no forwarding needed."
                     }
