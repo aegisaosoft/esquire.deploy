@@ -27,8 +27,8 @@ pipeline {
 
     parameters {
         // ── Target host ───────────────────────────────────────────────────────
-        string(name: 'DEPLOY_HOST', defaultValue: '',
-            description: 'Target host IP or hostname (auto-detected if empty)')
+        string(name: 'DEPLOY_HOST', defaultValue: '192.168.1.104',
+            description: 'Target host IP or hostname')
         string(name: 'DB_HOST', defaultValue: '',
             description: 'PostgreSQL host (defaults to DEPLOY_HOST if empty)')
         string(name: 'REGISTRY', defaultValue: '',
