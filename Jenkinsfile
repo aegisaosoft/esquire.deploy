@@ -339,7 +339,7 @@ pipeline {
                 stage('frontend') {
                     when { expression { return params.BUILD_FRONTEND } }
                     steps {
-                        sh "docker build -t esquire/frontend:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.explorer/frontend/Dockerfile ${PROJECT_DIR}/esquire.explorer/frontend"
+                        sh "docker build --no-cache -t esquire/frontend:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.explorer/frontend/Dockerfile ${PROJECT_DIR}/esquire.explorer/frontend"
                     }
                 }
                 stage('proxy') {
