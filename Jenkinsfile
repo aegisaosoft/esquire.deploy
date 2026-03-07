@@ -671,19 +671,13 @@ PFEOF
                     def runtime = sh(script: "cat ${PROJECT_DIR}/.k8s-runtime", returnStdout: true).trim()
 
                     echo "Enabling Kubernetes Dashboard..."
-                    if (runtime == 'minikube') {
-                        sh """
-                            minikube addons enable dashboard 2>/dev/null || \
-                                docker exec minikube minikube addons enable dashboard
-                            minikube addons enable metrics-server 2>/dev/null || \
-                                docker exec minikube minikube addons enable metrics-server || true
-                        """
-                    } else {
-                        // For non-minikube: install dashboard via kubectl
-                        sh """
+                    sh """
+                        minikube addons enable dashboard 2>/dev/null || \
+                            docker exec minikube minikube addons enable dashboard 2>/dev/null || \
                             kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml || true
-                        """
-                    }
+                        minikube addons enable metrics-server 2>/dev/null || \
+                            docker exec minikube minikube addons enable metrics-server 2>/dev/null || true
+                    """
 
                     // Wait for dashboard pod to be ready
                     sh """
