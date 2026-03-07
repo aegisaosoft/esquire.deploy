@@ -389,6 +389,7 @@ pipeline {
                             else
                                 for img in $IMAGES; do
                                     echo "Loading $img into minikube (via docker)..."
+                                    docker exec minikube ctr -n k8s.io image rm docker.io/$img:latest 2>/dev/null || true
                                     docker save $img:latest | docker exec -i minikube ctr -n k8s.io image import -
                                 done
                             fi
