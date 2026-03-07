@@ -65,7 +65,7 @@ pipeline {
 
         // K8s
         NAMESPACE = 'esquire'
-        IMAGE_TAG = "b${BUILD_NUMBER}"
+        IMAGE_TAG = 'latest'
     }
 
     stages {
@@ -209,12 +209,6 @@ pipeline {
                     # Keycloak realm import — replace __DEPLOY_HOST__ in redirectUris/webOrigins
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${IMPORT_DIR}/esquire.json
 
-                    # K8s manifests — pin image tags to build number (avoids CRI cache issues with :latest)
-                    for yaml in ${K8S_DIR}/biztree.yaml ${K8S_DIR}/enyman.yaml ${K8S_DIR}/pacman.yaml \
-                                ${K8S_DIR}/keysmith.yaml ${K8S_DIR}/gateway.yaml ${K8S_DIR}/frontend.yaml \
-                                ${K8S_DIR}/proxy.yaml; do
-                        sed -i 's|image: esquire/\\(.*\\):latest|image: esquire/\\1:${IMAGE_TAG}|g' \$yaml
-                    done
                 """
 
                 // TLS certificate: generate or reuse from persistent store
@@ -363,58 +357,51 @@ pipeline {
                 expression { return params.BUILD_SERVICES || params.BUILD_FRONTEND }
             }
             steps {
-                sh """
-                    RUNTIME=\$(cat /opt/esquire/.k8s-runtime)
-                    TAG="${IMAGE_TAG}"
+                sh '''
+                    RUNTIME=$(cat /opt/esquire/.k8s-runtime)
 
                     IMAGES="esquire/proxy"
-                    if [ "\$BUILD_SERVICES" = "true" ]; then
-                        IMAGES="\$IMAGES esquire/biztree esquire/enyman esquire/pacman esquire/keysmith esquire/gateway"
+                    if [ "$BUILD_SERVICES" = "true" ]; then
+                        IMAGES="$IMAGES esquire/biztree esquire/enyman esquire/pacman esquire/keysmith esquire/gateway"
                     fi
-                    if [ "\$BUILD_FRONTEND" = "true" ]; then
-                        IMAGES="\$IMAGES esquire/frontend"
+                    if [ "$BUILD_FRONTEND" = "true" ]; then
+                        IMAGES="$IMAGES esquire/frontend"
                     fi
 
-                    case "\$RUNTIME" in
+                    case "$RUNTIME" in
                         microk8s)
-                            for img in \$IMAGES; do
-                                echo "Importing \$img:\$TAG into microk8s..."
-                                docker save \$img:\$TAG | microk8s ctr image import -
+                            for img in $IMAGES; do
+                                echo "Importing $img into microk8s..."
+                                docker save $img:latest | microk8s ctr image import -
                             done
                             ;;
                         k3s)
-                            for img in \$IMAGES; do
-                                echo "Importing \$img:\$TAG into k3s..."
-                                docker save \$img:\$TAG | sudo k3s ctr images import -
+                            for img in $IMAGES; do
+                                echo "Importing $img into k3s..."
+                                docker save $img:latest | sudo k3s ctr images import -
                             done
                             ;;
                         minikube)
-                            if command -v minikube > /dev/null 2>&1; then
-                                for img in \$IMAGES; do
-                                    echo "Loading \$img:\$TAG into minikube..."
-                                    minikube image load \$img:\$TAG
-                                done
-                            else
-                                for img in \$IMAGES; do
-                                    echo "Loading \$img:\$TAG into minikube (via docker)..."
-                                    docker exec minikube ctr -n k8s.io image rm docker.io/\$img:\$TAG 2>/dev/null || true
-                                    docker save \$img:\$TAG | docker exec -i minikube ctr -n k8s.io image import -
-                                done
-                            fi
+                            # Minikube with Docker driver: load into minikube's Docker daemon
+                            # (NOT containerd — kubelet uses Docker runtime, not CRI)
+                            for img in $IMAGES; do
+                                echo "Loading $img into minikube Docker..."
+                                docker save $img:latest | docker exec -i minikube docker load
+                            done
                             ;;
                         *)
-                            if [ -n "\$REGISTRY" ]; then
-                                echo "Full K8s — pushing images to registry \$REGISTRY..."
-                                for img in \$IMAGES; do
-                                    docker tag \$img:\$TAG \$REGISTRY/\$img:\$TAG
-                                    docker push \$REGISTRY/\$img:\$TAG
+                            if [ -n "$REGISTRY" ]; then
+                                echo "Full K8s — pushing images to registry $REGISTRY..."
+                                for img in $IMAGES; do
+                                    docker tag $img:latest $REGISTRY/$img:latest
+                                    docker push $REGISTRY/$img:latest
                                 done
                             else
                                 echo "Generic K8s — images accessible via Docker daemon."
                             fi
                             ;;
                     esac
-                """
+                '''
             }
         }
 
