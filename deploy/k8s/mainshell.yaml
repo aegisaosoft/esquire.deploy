@@ -33,6 +33,8 @@ spec:
                   key: KEYCLOAK_REALM
             - name: KEYCLOAK_CLIENT_ID
               value: "esq-react"
+            - name: API_BASE_PATH
+              value: ""
             - name: GATEWAY_URL
               value: "http://gateway:7070"
             - name: PLUGINS_CONFIG_FILE
