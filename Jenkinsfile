@@ -41,6 +41,8 @@ pipeline {
             description: 'Build backend microservices (bizTree, enyMan, pacMan, keySmith, gateway)')
         booleanParam(name: 'BUILD_FRONTEND', defaultValue: false,
             description: 'Build Angular frontend')
+        booleanParam(name: 'BUILD_BACKOFFICE', defaultValue: false,
+            description: 'Build Backoffice plugin (Business Explorer)')
         booleanParam(name: 'RUN_DB_SEED',    defaultValue: false,
             description: 'Run DB seed scripts (esquire.db.seed)')
         booleanParam(name: 'FULL_RESET',     defaultValue: false,
@@ -55,6 +57,7 @@ pipeline {
         string(name: 'BRANCH_SERVICES',  defaultValue: 'develop', description: 'Branch for esquire.services')
         string(name: 'BRANCH_EXPLORER',  defaultValue: 'develop', description: 'Branch for esquire.explorer')
         string(name: 'BRANCH_DB_SEED',   defaultValue: 'develop', description: 'Branch for esquire.db.seed')
+        string(name: 'BRANCH_BACKOFFICE', defaultValue: 'develop', description: 'Branch for esquire.plugin.backoffice')
     }
 
     environment {
@@ -116,6 +119,14 @@ pipeline {
                         dir('esquire.db.seed') {
                             git url: "https://github.com/${GITHUB_SERVICES_ORG}/esquire.db.seed.git",
                                 branch: "${params.BRANCH_DB_SEED}"
+                        }
+                    }
+                }
+                stage('esquire.plugin.backoffice') {
+                    steps {
+                        dir('esquire.plugin.backoffice') {
+                            git url: "https://github.com/${GITHUB_MAINSHELL_ORG}/esquire.plugin.backoffice.git",
+                                branch: "${params.BRANCH_BACKOFFICE}"
                         }
                     }
                 }
@@ -198,6 +209,11 @@ pipeline {
                     tar cf - --exclude='.git' \
                         -C esquire.db.seed . | tar xf - -C ${PROJECT_DIR}/esquire.db.seed/
 
+                    # esquire.plugin.backoffice — overwrite only
+                    mkdir -p ${PROJECT_DIR}/esquire.plugin.backoffice
+                    tar cf - --exclude='.git' --exclude='node_modules' --exclude='.vscode' \
+                        -C esquire.plugin.backoffice . | tar xf - -C ${PROJECT_DIR}/esquire.plugin.backoffice/
+
                     # deploy — clean copy (needs fresh __DEPLOY_HOST__ placeholders)
                     rm -rf ${PROJECT_DIR}/deploy
                     mkdir -p ${PROJECT_DIR}/deploy
@@ -223,6 +239,7 @@ pipeline {
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/gateway.yaml
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/frontend.yaml
                     sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/mainshell.yaml
+                    sed -i 's|__DEPLOY_HOST__|${env.RESOLVED_HOST}|g' ${K8S_DIR}/backoffice.yaml
                     sed -i 's|__DB_HOST__|${env.RESOLVED_DB_HOST}|g'  ${K8S_DIR}/postgres-endpoint.yaml
 
                     # Keycloak realm import — replace __DEPLOY_HOST__ in redirectUris/webOrigins
@@ -368,6 +385,12 @@ pipeline {
                         sh "docker build --no-cache -t esquire/frontend:${IMAGE_TAG} -f ${PROJECT_DIR}/esquire.explorer/frontend/Dockerfile ${PROJECT_DIR}/esquire.explorer/frontend"
                     }
                 }
+                stage('backoffice') {
+                    when { expression { return params.BUILD_BACKOFFICE } }
+                    steps {
+                        sh "docker build --no-cache -t esquire/backoffice:${IMAGE_TAG} ${PROJECT_DIR}/esquire.plugin.backoffice"
+                    }
+                }
                 stage('proxy') {
                     steps {
                         sh "docker build -t esquire/proxy:${IMAGE_TAG} ${PROJECT_DIR}/deploy/proxy"
@@ -379,7 +402,7 @@ pipeline {
         // ── 7. Import images into K8s runtime ───────────────────────────────
         stage('Import Images') {
             when {
-                expression { return params.BUILD_MAINSHELL || params.BUILD_SERVICES || params.BUILD_FRONTEND }
+                expression { return params.BUILD_MAINSHELL || params.BUILD_SERVICES || params.BUILD_FRONTEND || params.BUILD_BACKOFFICE }
             }
             steps {
                 sh '''
@@ -394,6 +417,9 @@ pipeline {
                     fi
                     if [ "$BUILD_FRONTEND" = "true" ]; then
                         IMAGES="$IMAGES esquire/frontend"
+                    fi
+                    if [ "$BUILD_BACKOFFICE" = "true" ]; then
+                        IMAGES="$IMAGES esquire/backoffice"
                     fi
 
                     case "$RUNTIME" in
@@ -499,6 +525,7 @@ pipeline {
                     kubectl apply -f ${K8S_DIR}/gateway.yaml
                     kubectl apply -f ${K8S_DIR}/frontend.yaml
                     kubectl apply -f ${K8S_DIR}/mainshell.yaml
+                    kubectl apply -f ${K8S_DIR}/backoffice.yaml
                     kubectl apply -f ${K8S_DIR}/proxy.yaml
                 """
             }
@@ -517,6 +544,9 @@ pipeline {
                     }
                     if (params.BUILD_FRONTEND) {
                         restarts += ['frontend']
+                    }
+                    if (params.BUILD_BACKOFFICE) {
+                        restarts += ['backoffice']
                     }
                     restarts += ['proxy']
                     if (restarts) {
@@ -557,6 +587,9 @@ pipeline {
                 echo "Waiting for Mainshell..."
                 sh "kubectl rollout status deployment/mainshell -n ${NAMESPACE} --timeout=180s"
 
+                echo "Waiting for Backoffice plugin..."
+                sh "kubectl rollout status deployment/backoffice -n ${NAMESPACE} --timeout=120s"
+
                 echo "Waiting for HTTPS Proxy..."
                 sh "kubectl rollout status deployment/proxy -n ${NAMESPACE} --timeout=60s"
             }
@@ -593,6 +626,14 @@ pipeline {
                         echo "Mainshell -> 200 OK"
                     else
                         echo "Mainshell -> $STATUS (may still be starting)"
+                    fi
+
+                    echo "Testing Backoffice plugin health..."
+                    STATUS=$(curl -so /dev/null -w "%{http_code}" --connect-timeout 5 -k https://$NODE_IP:30543/backoffice/health 2>/dev/null || echo "000")
+                    if [ "$STATUS" = "200" ]; then
+                        echo "Backoffice -> 200 OK"
+                    else
+                        echo "Backoffice -> $STATUS (may still be starting)"
                     fi
 
                     echo "Testing Keycloak via NodePort :30080..."

@@ -1,0 +1,55 @@
+# =============================================================================
+# Backoffice Plugin (Business Explorer)
+# Node.js proxy + Webpack Module Federation remote
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backoffice
+  namespace: esquire
+  labels:
+    app: backoffice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backoffice
+  template:
+    metadata:
+      labels:
+        app: backoffice
+    spec:
+      containers:
+        - name: backoffice
+          image: esquire/backoffice:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 3002
+          env:
+            - name: PORT
+              value: "3002"
+            - name: PLUGIN_ID
+              value: "backoffice"
+            - name: PLUGIN_DISPLAY_NAME
+              value: "Business Explorer"
+            - name: PLUGIN_VERSION
+              value: "1.0.0"
+            - name: PLUGIN_HOST
+              value: "backoffice"
+            - name: GATEWAY_URL
+              value: "http://gateway:7070"
+            - name: REMOTE_ENTRY_BASE
+              value: "https://__DEPLOY_HOST__:30543/backoffice"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backoffice
+  namespace: esquire
+spec:
+  type: ClusterIP
+  selector:
+    app: backoffice
+  ports:
+    - port: 3002
+      targetPort: 3002

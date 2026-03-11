@@ -205,6 +205,26 @@ services:
     networks:
       - esquirenet
 
+  # ── Backoffice Plugin (Business Explorer) ────────────────────────────────
+  backoffice:
+    container_name: esq-backoffice
+    build:
+      context: ../esquire.plugin.backoffice
+    image: esquire/backoffice:latest
+    restart: unless-stopped
+    environment:
+      - PORT=3002
+      - PLUGIN_ID=backoffice
+      - PLUGIN_DISPLAY_NAME=Business Explorer
+      - PLUGIN_VERSION=1.0.0
+      - PLUGIN_HOST=esq-backoffice
+      - GATEWAY_URL=http://esq-gateway:7070
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - esquirenet
+
   # ── Angular Frontend ─────────────────────────────────────────────────────
   frontend:
     container_name: esq-frontend
